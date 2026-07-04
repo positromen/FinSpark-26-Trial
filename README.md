@@ -11,12 +11,24 @@ audit log with post-quantum cryptography (ML-KEM-768 / ML-DSA-65).
 
 ```powershell
 .\run.ps1            # Windows PowerShell  (or ./run.sh in Git Bash / Linux)
-# then open http://127.0.0.1:8000  — the SOC dashboard
+# then open http://127.0.0.1:8000  — the login screen
 ```
 
-One command: venv + deps + seeded DB + dashboard + API. `-Reset` (or
-`--reset`) wipes the DB for a clean demo state. See `DEMO_SCRIPT.md` for the
-full 5-minute demo narration. Docker alternative: `docker compose up --build`
+One command: venv + deps + seeded DB + web app + API. `-Reset` (or `--reset`)
+wipes the DB for a clean demo state. See `DEMO_SCRIPT.md` for the full demo
+narration. Docker alternative: `docker compose up --build`
+
+### Two sides, one app (all password `prahari123`)
+
+| Login | Lands in | Role |
+|---|---|---|
+| `soc_admin` | **SOC Console** | security analyst watching every privileged session live |
+| `rmehta` | **Employee Portal** | a normal DBA performing privileged actions |
+| `ext_dsouza` | **Employee Portal** | the dormant vendor — the attacker |
+
+Staff act in the portal; every action is scored and enforced live (allow /
+step-up MFA / maker-checker / block); the SOC console sees it all in real time.
+Step-up MFA demo code: `246810`. Run the two windows side by side.
 
 ## Layout
 

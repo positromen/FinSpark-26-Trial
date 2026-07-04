@@ -5,8 +5,11 @@ from app.detection.rules import RuleHit, evaluate
 from app.detection.ueba import UebaModel
 from app.models.entities import Event, User
 
-# Contribution caps so neither side alone saturates the scale dishonestly
-RULE_CAP = 65
+# Contribution caps so neither side alone saturates the scale dishonestly.
+# The cap only binds when several rules stack (i.e. a genuine multi-signal attack);
+# a single-rule legitimate anomaly is well under it, so raising it does not make
+# ordinary activity block — it only sharpens clearly-malicious combinations.
+RULE_CAP = 80
 UEBA_WEIGHT = 0.35  # up to 35 points from behavioural anomaly
 PEER_BONUS = 10  # extra if wildly above same-role peers
 

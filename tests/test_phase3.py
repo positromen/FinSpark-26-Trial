@@ -51,28 +51,30 @@ def test_attack_gets_blocked_with_alert(db):
 
 
 def test_demo_attack_endpoint_and_websocket(db, monkeypatch, tmp_path):
-    """Full loop: WS client connected, POST /demo/attack, receive score + alert frames."""
+    """Full loop: analyst logs in, WS connected, POST /demo/attack, receive alert frame."""
     from app.main import app
-    from app.security import keys
+    from app.security import auth, keys
 
     monkeypatch.setattr(keys, "KEYS_DIR", tmp_path / "keys")  # isolate keystore
-    # Key the override on the ORIGINAL get_db object that Depends() captured,
-    # otherwise the endpoint silently hits the real file DB.
-    app.dependency_overrides[routes.get_db] = lambda: db
+    # Depends(get_db) resolves to auth.get_db everywhere now — override that object.
+    app.dependency_overrides[auth.get_db] = lambda: db
     routes._model = UebaModel()  # force retrain on this test DB
     client = TestClient(app)
     try:
+        token = client.post("/auth/login", json={"username": "soc_admin",
+                                                  "password": "prahari123"}).json()["token"]
+        h = {"Authorization": f"Bearer {token}"}
         with client.websocket_connect("/ws/feed") as ws:
-            r = client.post("/demo/attack")
+            r = client.post("/demo/attack", headers=h)
             assert r.status_code == 200
             body = r.json()
             assert body["score"] >= 85 and body["action"] == "BLOCK"
-            frame1 = ws.receive_json()
-            frame2 = ws.receive_json()
-            assert frame1["type"] == "score" and frame1["score"] >= 85
-            assert frame2["type"] == "alert" and frame2["action"] == "BLOCK"
-            assert any("5000" in x or "records" in x for x in frame2["reasons"])
-        alerts = client.get("/alerts").json()
+            frame = ws.receive_json()
+            assert frame["type"] == "alert" and frame["action"] == "BLOCK"
+            assert any("5000" in x or "records" in x for x in frame["reasons"])
+        # SOC endpoints require the analyst token; without it they are rejected.
+        assert client.get("/soc/alerts").status_code in (401, 403)
+        alerts = client.get("/soc/alerts", headers=h).json()
         assert alerts and alerts[0]["action_taken"] == "BLOCK"
     finally:
         app.dependency_overrides.clear()

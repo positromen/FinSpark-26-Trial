@@ -1,28 +1,28 @@
-"""REST + WebSocket endpoints for users, sessions, scoring, and the demo attack."""
+"""REST + WebSocket API: auth, employee portal, SOC console, PQC layer."""
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, WebSocket
+from pydantic import BaseModel
 from sqlalchemy.orm import Session as OrmSession
 
-from pydantic import BaseModel
-
 from app.api.ws import feed_endpoint, manager
+from app.config import settings
+from app.detection import live
 from app.detection.response import respond
 from app.detection.score import assess
 from app.detection.ueba import UebaModel
-from app.models.db import SessionLocal
 from app.models.entities import Alert, AuditLogEntry, Session, User
 from app.security import audit, pqc, vault
+from app.security.auth import (create_token, current_user, get_db, require_analyst,
+                               verify_password)
 from app.simulator.attack import trigger_attack
+from app.simulator.normal import RESOURCES_BY_ROLE
 
 router = APIRouter()
 _model = UebaModel()
 
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+ALL_RESOURCES = [{"name": r, "owner_role": role}
+                 for role, rs in RESOURCES_BY_ROLE.items() for r in rs]
 
 
 def get_model(db: OrmSession) -> UebaModel:
@@ -32,89 +32,150 @@ def get_model(db: OrmSession) -> UebaModel:
     return _model
 
 
-@router.get("/users")
-def list_users(db: OrmSession = Depends(get_db)) -> list[dict]:
-    return [{"id": u.id, "username": u.username, "name": u.name, "role": u.role,
-             "is_dormant": u.is_dormant, "is_vendor": u.is_vendor}
-            for u in db.query(User).all()]
+def _login_identity(user: User) -> tuple[str, str, str]:
+    """Connection profile for a login. A dormant/vendor account inherently comes
+    from an untrusted context (this is what makes the attack realistic)."""
+    if user.is_dormant or user.is_vendor:
+        return "103.94.55.7", "Unknown (VPN exit)", "LAPTOP-UNREG"
+    return f"10.20.{10 + user.id}.11", "Pune, IN", f"WKS-{user.username.upper()}"
 
 
-@router.get("/sessions/{session_id}/score")
-def score_session(session_id: int, db: OrmSession = Depends(get_db)) -> dict:
-    sess = db.get(Session, session_id)
-    if sess is None:
-        raise HTTPException(404, "session not found")
-    events = sorted(sess.events, key=lambda e: e.timestamp)
-    result = assess(sess.user, events, get_model(db))
-    return {"session_id": session_id, "user": sess.user.username, **result.as_dict()}
+async def _broadcast_activity(user: User, sess: Session, outcome: live.ActionOutcome,
+                              action: str, resource: str) -> None:
+    await manager.broadcast({
+        "type": "activity",
+        "session_id": sess.id, "user": user.username, "name": user.name,
+        "role": user.role, "action": action, "resource": resource,
+        "score": round(outcome.score, 1), "decision": outcome.decision,
+        "allowed": outcome.allowed, "status": outcome.session_status,
+        "reasons": outcome.reasons,
+    })
+    if outcome.decision != "ALLOW":
+        await manager.broadcast({
+            "type": "alert", "session_id": sess.id, "user": user.username,
+            "role": user.role, "severity": outcome.severity, "action": outcome.decision,
+            "score": round(outcome.score, 1), "reasons": outcome.reasons,
+        })
 
 
-@router.get("/alerts")
-def list_alerts(limit: int = 50, db: OrmSession = Depends(get_db)) -> list[dict]:
-    alerts = db.query(Alert).order_by(Alert.created_at.desc()).limit(limit).all()
-    return [{"id": a.id, "user_id": a.user_id, "session_id": a.session_id,
-             "severity": a.severity, "action_taken": a.action_taken,
-             "message": a.message, "created_at": a.created_at.isoformat()}
-            for a in alerts]
+# ======================= AUTH =======================
+
+class LoginIn(BaseModel):
+    username: str
+    password: str
 
 
-@router.post("/demo/attack")
-async def demo_attack(db: OrmSession = Depends(get_db)) -> dict:
-    """Trigger the 2 AM insider attack: detect, score, respond, and broadcast live."""
-    model = get_model(db)  # train on clean history BEFORE injecting the attack
-    sess = trigger_attack(db)
-    events = sorted(sess.events, key=lambda e: e.timestamp)
-    assessment = assess(sess.user, events, model)
-    sess.risk_score = assessment.score
-    decision = respond(db, sess.user, sess, assessment)
-    db.commit()
-    audit.append_entry(db, actor="prahari-engine", action="THREAT_DETECTED",
-                       payload=f"user={sess.user.username} session={sess.id} "
-                               f"score={assessment.score:.0f} action={decision.action}")
+@router.post("/auth/login")
+def login(body: LoginIn, db: OrmSession = Depends(get_db)) -> dict:
+    user = db.query(User).filter_by(username=body.username).first()
+    if user is None or not verify_password(body.password, user.password_hash):
+        raise HTTPException(401, "invalid username or password")
+    return {"token": create_token(user), "user": {
+        "username": user.username, "name": user.name, "role": user.role,
+        "account_type": user.account_type, "is_dormant": user.is_dormant,
+        "is_vendor": user.is_vendor}}
 
-    payload = {
-        "type": "attack_detected",
-        "session_id": sess.id,
-        "user": sess.user.username,
-        "score": round(assessment.score, 1),
-        "action": decision.action,
-        "severity": decision.severity,
-        "reasons": assessment.reasons,
-        "events": [{"t": e.timestamp.isoformat(), "action": e.action_type,
-                    "resource": e.resource, "records": e.records_touched}
-                   for e in events],
+
+@router.get("/auth/me")
+def me(user: User = Depends(current_user)) -> dict:
+    return {"username": user.username, "name": user.name, "role": user.role,
+            "account_type": user.account_type}
+
+
+# ======================= EMPLOYEE PORTAL =======================
+
+class ActionIn(BaseModel):
+    action: str
+    resource: str
+    records: int | None = None
+    mfa_code: str | None = None
+
+
+def _employee(user: User = Depends(current_user)) -> User:
+    if user.account_type != "EMPLOYEE":
+        raise HTTPException(403, "employee account required for the portal")
+    return user
+
+
+def _session_state(sess: Session) -> dict:
+    return {"id": sess.id, "status": sess.status, "score": round(sess.risk_score, 1),
+            "started_at": sess.started_at.isoformat(), "source_ip": sess.source_ip,
+            "geo": sess.geo, "device": sess.device,
+            "reasons": json.loads(sess.risk_reasons or "[]"),
+            "events": [{"t": e.timestamp.isoformat(), "action": e.action_type,
+                        "resource": e.resource, "records": e.records_touched}
+                       for e in sorted(sess.events, key=lambda e: e.timestamp)]}
+
+
+@router.post("/portal/bootstrap")
+def portal_bootstrap(user: User = Depends(_employee), db: OrmSession = Depends(get_db)) -> dict:
+    """Open the employee's live session and return everything the portal needs."""
+    get_model(db)  # ensure baseline trained before any live scoring
+    ip, geo, device = _login_identity(user)
+    sess = live.open_session(db, user, ip, geo, device)
+    return {
+        "user": {"username": user.username, "name": user.name, "role": user.role,
+                 "is_vendor": user.is_vendor, "is_dormant": user.is_dormant},
+        "session": _session_state(sess),
+        "my_resources": RESOURCES_BY_ROLE.get(user.role, []),
+        "all_resources": ALL_RESOURCES,
+        "catalog": live.ACTION_CATALOG,
     }
-    await manager.broadcast({"type": "score", "user": sess.user.username,
-                             "session_id": sess.id, "score": payload["score"]})
-    await manager.broadcast({**payload, "type": "alert"})
-    return payload
 
 
-@router.websocket("/ws/feed")
-async def ws_feed(ws: WebSocket) -> None:
-    await feed_endpoint(ws)
+@router.post("/portal/action")
+async def portal_action(body: ActionIn, user: User = Depends(_employee),
+                        db: OrmSession = Depends(get_db)) -> dict:
+    if body.action not in live.ACTION_CATALOG:
+        raise HTTPException(400, f"unknown action '{body.action}'")
+    ip, geo, device = _login_identity(user)
+    sess = live.open_session(db, user, ip, geo, device)  # reuses active / stays-locked if blocked
+
+    records = body.records if body.records is not None \
+        else live.ACTION_CATALOG[body.action]["default_records"]
+    mfa_ok = bool(body.mfa_code) and body.mfa_code == settings.mfa_code
+
+    outcome = live.perform_action(db, get_model(db), sess, user, body.action,
+                                  body.resource, records, mfa_ok=mfa_ok)
+    if not outcome.allowed and outcome.decision == "BLOCK":
+        audit.append_entry(db, actor="prahari-engine", action="THREAT_BLOCKED",
+                           payload=f"user={user.username} session={sess.id} "
+                                   f"score={outcome.score:.0f} attempted={body.action}:{body.resource}")
+    await _broadcast_activity(user, sess, outcome, body.action, body.resource)
+    return {"allowed": outcome.allowed, "decision": outcome.decision,
+            "severity": outcome.severity, "score": round(outcome.score, 1),
+            "message": outcome.message, "reasons": outcome.reasons,
+            "session": _session_state(sess)}
 
 
-# --- Dashboard data (Phase 5) ---
+@router.post("/portal/logout")
+def portal_logout(user: User = Depends(_employee), db: OrmSession = Depends(get_db)) -> dict:
+    sess = (db.query(Session)
+            .filter(Session.user_id == user.id, Session.status == "ACTIVE")
+            .order_by(Session.id.desc()).first())
+    if sess:
+        live.close_session(db, sess)
+    return {"ok": True}
 
-@router.get("/dashboard/overview")
-def dashboard_overview(db: OrmSession = Depends(get_db)) -> dict:
-    """Everything the SOC dashboard needs on load: users, scored sessions, heatmap."""
-    import json
 
+# ======================= SOC CONSOLE (analyst only) =======================
+
+@router.get("/soc/overview")
+def soc_overview(user: User = Depends(require_analyst),
+                 db: OrmSession = Depends(get_db)) -> dict:
+    """Dashboard load: users, scored historical sessions, heatmap, live sessions."""
     model = get_model(db)
-    sessions = (db.query(Session).filter(Session.ended_at != None)  # noqa: E711
+    sessions = (db.query(Session).filter(Session.status == "CLOSED")
                 .order_by(Session.started_at).all())
-    for sess in sessions:  # score-and-persist any session not yet assessed
+    for sess in sessions:
         if sess.risk_reasons is None:
-            events = sorted(sess.events, key=lambda e: e.timestamp)
-            a = assess(sess.user, events, model)
+            a = assess(sess.user, sorted(sess.events, key=lambda e: e.timestamp), model)
             sess.risk_score = a.score
             sess.risk_reasons = json.dumps(a.reasons)
     db.commit()
 
     dates = sorted({s.started_at.date() for s in sessions})[-7:]
-    users = db.query(User).all()
+    users = db.query(User).filter(User.account_type == "EMPLOYEE").all()
     heatmap = []
     for u in users:
         cells = []
@@ -134,12 +195,54 @@ def dashboard_overview(db: OrmSession = Depends(get_db)) -> dict:
                       "reasons": json.loads(s.risk_reasons or "[]")}
                      for s in reversed(recent)],
         "heatmap": {"dates": [d.isoformat() for d in dates], "rows": heatmap},
-        "latest_score": round(recent[-1].risk_score, 1) if recent else 0,
+        "live_sessions": _live_sessions(db),
     }
 
 
-@router.get("/sessions/{session_id}/events")
-def session_events(session_id: int, db: OrmSession = Depends(get_db)) -> list[dict]:
+def _live_sessions(db: OrmSession) -> list[dict]:
+    rows = (db.query(Session).filter(Session.status.in_(["ACTIVE", "BLOCKED"]))
+            .order_by(Session.id.desc()).all())
+    return [{"id": s.id, "user": s.user.username, "name": s.user.name, "role": s.user.role,
+             "status": s.status, "score": round(s.risk_score, 1),
+             "source_ip": s.source_ip, "geo": s.geo, "device": s.device,
+             "started_at": s.started_at.isoformat(),
+             "reasons": json.loads(s.risk_reasons or "[]"),
+             "events": [{"t": e.timestamp.isoformat(), "action": e.action_type,
+                         "resource": e.resource, "records": e.records_touched,
+                         "ip": e.source_ip, "device": e.device}
+                        for e in sorted(s.events, key=lambda e: e.timestamp)]}
+            for s in rows]
+
+
+@router.get("/soc/live")
+def soc_live(user: User = Depends(require_analyst), db: OrmSession = Depends(get_db)) -> list[dict]:
+    return _live_sessions(db)
+
+
+@router.get("/soc/alerts")
+def soc_alerts(limit: int = 50, user: User = Depends(require_analyst),
+               db: OrmSession = Depends(get_db)) -> list[dict]:
+    alerts = db.query(Alert).order_by(Alert.created_at.desc()).limit(limit).all()
+    return [{"id": a.id, "user_id": a.user_id, "session_id": a.session_id,
+             "severity": a.severity, "action_taken": a.action_taken,
+             "message": a.message, "created_at": a.created_at.isoformat()} for a in alerts]
+
+
+@router.post("/soc/sessions/{session_id}/approve")
+def soc_approve(session_id: int, user: User = Depends(require_analyst),
+                db: OrmSession = Depends(get_db)) -> dict:
+    """Maker-checker: an analyst approves a held session (records the decision)."""
+    sess = db.get(Session, session_id)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    audit.append_entry(db, actor=user.username, action="MAKER_CHECKER_APPROVED",
+                       payload=f"session={session_id} user={sess.user.username}")
+    return {"ok": True, "session_id": session_id, "approved_by": user.username}
+
+
+@router.get("/soc/sessions/{session_id}/events")
+def soc_session_events(session_id: int, user: User = Depends(require_analyst),
+                       db: OrmSession = Depends(get_db)) -> list[dict]:
     sess = db.get(Session, session_id)
     if sess is None:
         raise HTTPException(404, "session not found")
@@ -148,7 +251,34 @@ def session_events(session_id: int, db: OrmSession = Depends(get_db)) -> list[di
             for e in sorted(sess.events, key=lambda e: e.timestamp)]
 
 
-# --- Post-quantum security layer (Phase 4) ---
+@router.post("/demo/attack")
+async def demo_attack(user: User = Depends(require_analyst),
+                      db: OrmSession = Depends(get_db)) -> dict:
+    """Scripted fallback: inject the full 2 AM attack in one call (for the SOC view)."""
+    model = get_model(db)
+    sess = trigger_attack(db)
+    events = sorted(sess.events, key=lambda e: e.timestamp)
+    assessment = assess(sess.user, events, model)
+    sess.risk_score = assessment.score
+    sess.risk_reasons = json.dumps(assessment.reasons)
+    decision = respond(db, sess.user, sess, assessment)
+    db.commit()
+    audit.append_entry(db, actor="prahari-engine", action="THREAT_DETECTED",
+                       payload=f"user={sess.user.username} session={sess.id} "
+                               f"score={assessment.score:.0f} action={decision.action}")
+    payload = {"session_id": sess.id, "user": sess.user.username,
+               "score": round(assessment.score, 1), "action": decision.action,
+               "severity": decision.severity, "reasons": assessment.reasons}
+    await manager.broadcast({"type": "alert", **payload})
+    return payload
+
+
+@router.websocket("/ws/feed")
+async def ws_feed(ws: WebSocket) -> None:
+    await feed_endpoint(ws)
+
+
+# ======================= POST-QUANTUM SECURITY =======================
 
 class SecretIn(BaseModel):
     name: str
@@ -161,24 +291,27 @@ def pqc_info() -> dict:
 
 
 @router.post("/vault/secrets")
-def vault_store(body: SecretIn, db: OrmSession = Depends(get_db)) -> dict:
-    item = vault.store_secret(db, body.name, body.secret)
-    audit.append_entry(db, actor="vault", action="SECRET_STORED", payload=f"name={body.name}")
-    return {"name": item.name, "kem": pqc.KEM_ALG, "stored": True}
+def vault_store(body: SecretIn, user: User = Depends(require_analyst),
+                db: OrmSession = Depends(get_db)) -> dict:
+    vault.store_secret(db, body.name, body.secret)
+    audit.append_entry(db, actor=user.username, action="SECRET_STORED", payload=f"name={body.name}")
+    return {"name": body.name, "kem": pqc.KEM_ALG, "stored": True}
 
 
 @router.get("/vault/secrets/{name}")
-def vault_get(name: str, db: OrmSession = Depends(get_db)) -> dict:
+def vault_get(name: str, user: User = Depends(require_analyst),
+              db: OrmSession = Depends(get_db)) -> dict:
     try:
         secret = vault.get_secret(db, name)
     except KeyError:
         raise HTTPException(404, f"no vault item named '{name}'")
-    audit.append_entry(db, actor="vault", action="SECRET_ACCESSED", payload=f"name={name}")
+    audit.append_entry(db, actor=user.username, action="SECRET_ACCESSED", payload=f"name={name}")
     return {"name": name, "secret": secret}
 
 
 @router.get("/audit")
-def audit_list(limit: int = 100, db: OrmSession = Depends(get_db)) -> list[dict]:
+def audit_list(limit: int = 100, user: User = Depends(require_analyst),
+               db: OrmSession = Depends(get_db)) -> list[dict]:
     entries = db.query(AuditLogEntry).order_by(AuditLogEntry.id.desc()).limit(limit).all()
     return [{"id": e.id, "timestamp": e.timestamp.isoformat(), "actor": e.actor,
              "action": e.action, "payload": e.payload, "prev_hash": e.prev_hash,
@@ -186,7 +319,8 @@ def audit_list(limit: int = 100, db: OrmSession = Depends(get_db)) -> list[dict]
 
 
 @router.get("/audit/verify")
-def audit_verify(db: OrmSession = Depends(get_db)) -> dict:
+def audit_verify(user: User = Depends(require_analyst),
+                 db: OrmSession = Depends(get_db)) -> dict:
     report = audit.verify_chain(db)
     return {"ok": report.ok, "entries_checked": report.entries_checked,
             "first_bad_id": report.first_bad_id, "problem": report.problem,
@@ -194,11 +328,12 @@ def audit_verify(db: OrmSession = Depends(get_db)) -> dict:
 
 
 @router.post("/demo/tamper")
-async def demo_tamper(db: OrmSession = Depends(get_db)) -> dict:
+async def demo_tamper(user: User = Depends(require_analyst),
+                      db: OrmSession = Depends(get_db)) -> dict:
     """Maliciously edit one audit entry, then re-verify — the chain must FAIL."""
     entry = db.query(AuditLogEntry).order_by(AuditLogEntry.id).first()
     if entry is None:
-        raise HTTPException(400, "audit log is empty — trigger the attack first")
+        raise HTTPException(400, "audit log is empty — run some activity first")
     original = entry.payload
     entry.payload = original.replace("BLOCK", "ALLOW") if "BLOCK" in original \
         else original + " [EDITED]"

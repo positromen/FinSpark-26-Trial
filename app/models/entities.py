@@ -15,7 +15,9 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(64), unique=True)
     name: Mapped[str] = mapped_column(String(128))
-    role: Mapped[str] = mapped_column(String(32))  # DBA / SYSADMIN / NET_ADMIN / APP_ADMIN / CONTRACTOR
+    role: Mapped[str] = mapped_column(String(32))  # DBA / SYSADMIN / NET_ADMIN / APP_ADMIN / CONTRACTOR / SOC_ANALYST
+    account_type: Mapped[str] = mapped_column(String(16), default="EMPLOYEE")  # EMPLOYEE / ANALYST
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_dormant: Mapped[bool] = mapped_column(Boolean, default=False)
     is_vendor: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -34,6 +36,10 @@ class Session(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     risk_score: Mapped[float] = mapped_column(Float, default=0.0)  # 0-100, set in Phase 2
     risk_reasons: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON breakdown
+    status: Mapped[str] = mapped_column(String(16), default="CLOSED")  # ACTIVE / CLOSED / BLOCKED
+    source_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    geo: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    device: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     user: Mapped[User] = relationship(back_populates="sessions")
     events: Mapped[list["Event"]] = relationship(back_populates="session")

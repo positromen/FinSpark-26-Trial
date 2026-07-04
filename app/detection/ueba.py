@@ -53,13 +53,18 @@ class UebaModel:
         """Fit on all closed historical sessions. Returns number of training rows."""
         rows: list[list[float]] = []
         role_records: dict[str, list[float]] = {}
-        for sess in db.query(Session).filter(Session.ended_at != None).all():  # noqa: E711
+        # Baseline = closed historical sessions only; never live or blocked ones.
+        for sess in db.query(Session).filter(Session.status == "CLOSED").all():
             events = sorted(sess.events, key=lambda e: e.timestamp)
             if not events:
                 continue
             user = sess.user
             self.user_devices.setdefault(user.id, set()).update(e.device for e in events)
-            rows.append(extract_features(events, self.user_devices[user.id]))
+            # Train on cumulative prefixes as well as the full session, so live
+            # sessions (which arrive one action at a time) are in-distribution and
+            # normal early activity doesn't look anomalous just for being short.
+            for k in range(1, len(events) + 1):
+                rows.append(extract_features(events[:k], self.user_devices[user.id]))
             role_records.setdefault(user.role, []).append(
                 float(sum(e.records_touched for e in events)))
         if not rows:

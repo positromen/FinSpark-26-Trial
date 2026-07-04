@@ -3,7 +3,7 @@ import { riskBand } from '../api.js'
 const SEV_ICON = { CRITICAL: '⛔', WARNING: '⚠', INFO: 'ℹ' }
 const SEV_COLOR = { CRITICAL: 'var(--critical)', WARNING: 'var(--warning)', INFO: 'var(--good)' }
 
-export default function AlertsFeed({ alerts }) {
+export default function AlertsFeed({ alerts, flashId }) {
   if (!alerts.length) {
     return <div className="text-xs py-6 text-center" style={{ color: 'var(--muted)' }}>
       No alerts — all privileged activity within normal behaviour.
@@ -13,7 +13,8 @@ export default function AlertsFeed({ alerts }) {
     <ul className="space-y-2 max-h-72 overflow-y-auto pr-1">
       {alerts.map((a) => (
         <li key={a.id ?? a.created_at} className="rounded-lg p-2.5 text-xs"
-            style={{ background: 'rgba(255,255,255,0.03)', borderLeft: `3px solid ${SEV_COLOR[a.severity] ?? 'var(--muted)'}` }}>
+            style={{ background: 'rgba(255,255,255,0.03)', borderLeft: `3px solid ${SEV_COLOR[a.severity] ?? 'var(--muted)'}`,
+                     animation: a.session_id === flashId ? 'flash 1s ease' : 'none' }}>
           <div className="flex items-center gap-2">
             <span>{SEV_ICON[a.severity] ?? ''}</span>
             <span className="font-semibold" style={{ color: SEV_COLOR[a.severity] }}>

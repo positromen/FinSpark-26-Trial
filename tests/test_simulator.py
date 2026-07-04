@@ -22,9 +22,12 @@ def db():
 
 def test_seed_users_idempotent(db):
     users = seed_users(db)
-    assert len(seed_users(db)) == len(users) == 7
+    assert len(seed_users(db)) == len(users) == 8  # 7 employees + 1 SOC analyst
     dormant = [u for u in users if u.is_dormant]
     assert len(dormant) == 1 and dormant[0].is_vendor
+    analysts = [u for u in users if u.account_type == "ANALYST"]
+    assert len(analysts) == 1 and analysts[0].username == "soc_admin"
+    assert all(u.password_hash for u in users)  # everyone can authenticate
 
 
 def test_history_is_normal_business_hours(db):

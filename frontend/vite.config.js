@@ -10,14 +10,13 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      '/users': backend,
-      '/sessions': backend,
-      '/alerts': backend,
+      '/auth': backend,
+      '/portal': backend,
+      '/soc': backend,
       '/audit': backend,
       '/demo': backend,
       '/vault': backend,
       '/pqc': backend,
-      '/dashboard': backend,
       '/health': backend,
       '/ws': { target: 'ws://127.0.0.1:8000', ws: true },
     },

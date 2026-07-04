@@ -29,16 +29,23 @@ DEFAULT_USERS: list[dict] = [
     {"username": "vdeshmukh", "name": "Vikram Deshmukh", "role": "NET_ADMIN"},
     {"username": "nshinde", "name": "Neha Shinde", "role": "APP_ADMIN"},
     {"username": "ext_dsouza", "name": "Kevin D'Souza (Vendor)", "role": "CONTRACTOR",
-     "is_vendor": True, "is_dormant": True},  # dormant vendor account — Phase 3 attacker
+     "is_vendor": True, "is_dormant": True},  # dormant vendor account — the attacker
+    # SOC operator who logs into the Prahari console itself.
+    {"username": "soc_admin", "name": "Meera Nair (SOC)", "role": "SOC_ANALYST",
+     "account_type": "ANALYST"},
 ]
 
 
 def seed_users(db: OrmSession) -> list[User]:
-    """Insert the default privileged users if not present; return all users."""
+    """Insert default users (with demo passwords) if not present; return all users."""
+    from app.security.auth import hash_password  # local import avoids cycle at import time
+    from app.config import settings
+
     existing = {u.username for u in db.query(User).all()}
+    pw_hash = hash_password(settings.demo_password)
     for spec in DEFAULT_USERS:
         if spec["username"] not in existing:
-            db.add(User(**spec))
+            db.add(User(password_hash=pw_hash, **spec))
     db.commit()
     return db.query(User).all()
 
@@ -56,12 +63,15 @@ def simulate_day(db: OrmSession, day: datetime, rng: random.Random) -> int:
     Returns the number of events created.
     """
     count = 0
-    for user in db.query(User).filter(User.is_dormant == False).all():  # noqa: E712
+    employees = (db.query(User)
+                 .filter(User.is_dormant == False, User.account_type == "EMPLOYEE")  # noqa: E712
+                 .all())
+    for user in employees:
         resources = RESOURCES_BY_ROLE[user.role]
         for _ in range(rng.randint(1, 2)):  # sessions per day
             start = day.replace(hour=rng.randint(9, 15), minute=rng.randint(0, 59))
             ip, geo, device = _identity(rng, user)
-            sess = Session(user_id=user.id, started_at=start)
+            sess = Session(user_id=user.id, started_at=start, status="CLOSED")
             db.add(sess)
             db.flush()
 

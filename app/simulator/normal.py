@@ -1,0 +1,101 @@
+"""Simulate a realistic normal banking-ops day of privileged activity.
+
+Each active admin gets 1-2 sessions per day inside business hours, with a
+consistent device/IP/geo identity and routine actions: small DB queries,
+file access, and the occasional config change.
+"""
+import random
+from datetime import datetime, timedelta
+
+from sqlalchemy.orm import Session as OrmSession
+
+from app.models.entities import Event, Session, User
+
+RESOURCES_BY_ROLE: dict[str, list[str]] = {
+    "DBA": ["core-banking-db", "loans-db", "cards-db"],
+    "SYSADMIN": ["app-server-01", "app-server-02", "backup-server"],
+    "NET_ADMIN": ["firewall-hq", "router-dc1", "vpn-gateway"],
+    "APP_ADMIN": ["netbanking-app", "upi-switch", "mobile-app-backend"],
+    "CONTRACTOR": ["report-server", "test-db"],
+}
+
+ROUTINE_ACTIONS = ["DB_QUERY", "FILE_ACCESS", "DB_QUERY", "DB_QUERY", "CONFIG_CHANGE"]
+
+DEFAULT_USERS: list[dict] = [
+    {"username": "rmehta", "name": "Rajesh Mehta", "role": "DBA"},
+    {"username": "spatil", "name": "Sunita Patil", "role": "DBA"},
+    {"username": "akulkarni", "name": "Amit Kulkarni", "role": "SYSADMIN"},
+    {"username": "pjoshi", "name": "Priya Joshi", "role": "SYSADMIN"},
+    {"username": "vdeshmukh", "name": "Vikram Deshmukh", "role": "NET_ADMIN"},
+    {"username": "nshinde", "name": "Neha Shinde", "role": "APP_ADMIN"},
+    {"username": "ext_dsouza", "name": "Kevin D'Souza (Vendor)", "role": "CONTRACTOR",
+     "is_vendor": True, "is_dormant": True},  # dormant vendor account — Phase 3 attacker
+]
+
+
+def seed_users(db: OrmSession) -> list[User]:
+    """Insert the default privileged users if not present; return all users."""
+    existing = {u.username for u in db.query(User).all()}
+    for spec in DEFAULT_USERS:
+        if spec["username"] not in existing:
+            db.add(User(**spec))
+    db.commit()
+    return db.query(User).all()
+
+
+def _identity(rng: random.Random, user: User) -> tuple[str, str, str]:
+    """Stable ip/geo/device per user (small IP jitter)."""
+    base = 10 + user.id
+    ip = f"10.20.{base}.{rng.randint(10, 12)}"
+    return ip, "Pune, IN", f"WKS-{user.username.upper()}"
+
+
+def simulate_day(db: OrmSession, day: datetime, rng: random.Random) -> int:
+    """Generate one normal working day of events for all non-dormant users.
+
+    Returns the number of events created.
+    """
+    count = 0
+    for user in db.query(User).filter(User.is_dormant == False).all():  # noqa: E712
+        resources = RESOURCES_BY_ROLE[user.role]
+        for _ in range(rng.randint(1, 2)):  # sessions per day
+            start = day.replace(hour=rng.randint(9, 15), minute=rng.randint(0, 59))
+            ip, geo, device = _identity(rng, user)
+            sess = Session(user_id=user.id, started_at=start)
+            db.add(sess)
+            db.flush()
+
+            t = start
+            db.add(Event(user_id=user.id, session_id=sess.id, action_type="LOGIN",
+                         resource="pam-gateway", records_touched=0,
+                         source_ip=ip, geo=geo, device=device, timestamp=t))
+            count += 1
+            for _ in range(rng.randint(3, 8)):
+                t += timedelta(minutes=rng.randint(2, 25))
+                action = rng.choice(ROUTINE_ACTIONS)
+                records = rng.randint(1, 200) if action == "DB_QUERY" else 0
+                db.add(Event(user_id=user.id, session_id=sess.id, action_type=action,
+                             resource=rng.choice(resources), records_touched=records,
+                             source_ip=ip, geo=geo, device=device, timestamp=t))
+                count += 1
+            t += timedelta(minutes=rng.randint(2, 10))
+            db.add(Event(user_id=user.id, session_id=sess.id, action_type="LOGOUT",
+                         resource="pam-gateway", records_touched=0,
+                         source_ip=ip, geo=geo, device=device, timestamp=t))
+            sess.ended_at = t
+            count += 1
+    db.commit()
+    return count
+
+
+def simulate_history(db: OrmSession, days: int = 14, seed: int = 42,
+                     end: datetime | None = None) -> int:
+    """Populate `days` of baseline history ending yesterday. Returns event count."""
+    rng = random.Random(seed)
+    end = end or datetime.now()
+    total = 0
+    for offset in range(days, 0, -1):
+        day = (end - timedelta(days=offset)).replace(second=0, microsecond=0)
+        if day.weekday() < 5:  # banking ops weekdays only
+            total += simulate_day(db, day, rng)
+    return total

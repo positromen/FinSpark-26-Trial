@@ -1,169 +1,299 @@
-# Prahari — Project Status & Team Brief
+# PRAHARI — Complete Project Document
 
-**Last updated:** 4 July 2026 · **Progress: Phases 0–3 of 6 complete** (backend detection engine fully working)
+**Privileged-Access Insider-Threat Detection Platform for Banks**
 
----
-
-## 1. What we are building
-
-**Prahari** is a privileged-access **insider-threat detection platform** for banks, built for
-**FinSpark'26** (Bank of Maharashtra banking cybersecurity hackathon), Problem Statement 1:
-*"Privileged Access Misuse & Insider Threat Detection."*
-
-**One line:** catch a malicious insider in real time, respond automatically, and keep the proof quantum-safe.
-
-It watches privileged users (DBAs, sysadmins, contractors), scores how risky their behaviour is
-in real time (0–100), and responds automatically — step-up MFA, maker-checker approval, or an
-outright block — while protecting its own credentials and audit log with **post-quantum cryptography**.
-
-### The six judged outcomes
-1. Detect misuse of privileged accounts ✅ *(done)*
-2. Identify insider threats in real time ✅ *(done)*
-3. AI-driven behavioural analysis ✅ *(done)*
-4. Risk-based access control ✅ *(done)*
-5. Protect critical administrative systems ✅ *(done)*
-6. Quantum-proof cryptography for credentials + audit log ⏳ *(Phase 4 — next)*
+**Event:** FinSpark'26 — Bank of Maharashtra Banking Cybersecurity Hackathon
+**Problem Statement 1:** Privileged Access Misuse & Insider Threat Detection
+**Last updated:** 4 July 2026 · **Progress:** Phases 0–3 of 6 complete
 
 ---
 
-## 2. Tech stack
+## 1. The problem
 
-| Layer | Choice |
-|---|---|
-| Backend | Python 3.14, FastAPI + Uvicorn |
-| Database | SQLite via SQLAlchemy ORM (Postgres-swappable for the scalability story) |
-| ML / UEBA | scikit-learn IsolationForest |
-| Live updates | FastAPI WebSocket (`/ws/feed`) |
-| PQC (Phase 4) | ML-KEM-768 + ML-DSA-65 via liboqs-python or quantcrypt |
-| Frontend (Phase 5) | React + Vite + Tailwind + Recharts |
-| Packaging | Docker + docker-compose, `run.sh` one-command start, fully offline |
+Banks give a small set of people — database admins, system admins, network engineers,
+vendor contractors — *privileged* access to core systems: the core banking database,
+payment switches, firewalls. Traditional security (firewalls, antivirus, IAM) protects
+against **outsiders**. It is nearly blind to a **trusted insider** who:
+
+- reactivates a forgotten dormant/vendor account,
+- quietly escalates their own privileges,
+- logs in at 2 AM when nobody is watching,
+- bulk-exports thousands of customer records, and
+- edits the audit log to erase the evidence.
+
+Insider incidents are among the costliest breach categories in banking, and the audit
+trail itself becomes untrustworthy the moment a privileged user can touch it. On top of
+that, "harvest now, decrypt later" quantum threats mean credentials and evidence encrypted
+with classical crypto today may be readable in a few years.
+
+## 2. Our solution — Prahari ("sentinel")
+
+Prahari sits between privileged users and critical systems, and does four things:
+
+1. **Watches** every privileged action (login, query, export, config/privilege change)
+   as normalized events tied to a user session.
+2. **Scores** each session's risk 0–100 in real time by combining:
+   - a **rule engine** (known-bad patterns an auditor would flag), and
+   - **UEBA** — machine-learned behavioural baselines per user and role
+     (AI anomaly detection + peer-group comparison).
+3. **Responds** automatically based on the score: allow, force step-up MFA, require
+   maker-checker approval, or **block the session outright** — and raises an alert on a
+   live SOC dashboard, with a plain-English explanation of *why*.
+4. **Protects its own evidence** with post-quantum cryptography: privileged credentials
+   sealed in an **ML-KEM-768** vault, and every audit entry **hash-chained and ML-DSA-65
+   signed** so tampering is mathematically detectable — even by a future quantum attacker.
+
+**One line:** *catch a malicious insider in real time, respond automatically, and keep
+the proof quantum-safe.*
+
+### How it maps to the six judged outcomes
+
+| # | Required outcome | How Prahari delivers | Status |
+|---|---|---|---|
+| 1 | Detect misuse of privileged accounts | Rule engine: 5 weighted misuse patterns | ✅ done |
+| 2 | Identify insider threats in real time | Per-session scoring + WebSocket push (< 1 s) | ✅ done |
+| 3 | AI-driven behavioural analysis | IsolationForest UEBA + peer baselines | ✅ done |
+| 4 | Risk-based access control | Score→action ladder: MFA / maker-checker / block | ✅ done |
+| 5 | Protect critical admin systems | Blocks the session before the export completes | ✅ done |
+| 6 | Quantum-proof cryptography | ML-KEM vault + ML-DSA signed audit chain | ⏳ Phase 4 |
+
+### Judging weights we build against
+Business relevance **40%** · Security **30%** · Uniqueness **15%** · UX 5% · Scalability 5% · Ease 5%
+→ Priority: detection correctness + working PQC > fancy UI. Clean, simple dashboard.
 
 ---
 
-## 3. Architecture
+## 3. Tech stack
+
+| Layer | Choice | Why |
+|---|---|---|
+| Language | Python 3.14 | team familiarity, fast iteration |
+| API | FastAPI + Uvicorn | async, WebSocket support, auto OpenAPI docs |
+| Database | SQLite via SQLAlchemy ORM | zero-friction offline demo; ORM keeps it Postgres-swappable |
+| ML | scikit-learn `IsolationForest` | proven unsupervised anomaly detection, tiny footprint |
+| PQC | liboqs-python or quantcrypt → **ML-KEM-768** (FIPS 203) + **ML-DSA-65** (FIPS 204) | NIST-standardized post-quantum algorithms, behind one abstraction module |
+| Live feed | FastAPI WebSocket | real-time dashboard updates |
+| Frontend | React + Vite + Tailwind + Recharts | fast to build, professional SOC look |
+| Packaging | Docker + docker-compose + `run.sh` | one-command, fully **offline** demo (no internet at venue) |
+
+**Constraints honoured:** no cloud dependencies, no external APIs at demo time, no secrets
+in the repo, no heavyweight ML (PyTorch autoencoder is an optional stretch only).
+
+---
+
+## 4. Architecture
 
 ```
-Privileged activity (simulated) ─▶ Collection & normalization (Event/Session models)
+Privileged activity sources ─▶ Collection & normalization (Event/Session models)
                                         │
                        ┌────────────────┴────────────────┐
                        ▼                                  ▼
-             UEBA (IsolationForest              Rule engine (5 known-bad
-             + peer comparison)                 patterns with weights)
+             Behavioural analytics (UEBA)          Rule engine
+             IsolationForest + peer baseline       5 known-bad patterns
                        └────────────────┬────────────────┘
                                         ▼
-                          Risk scoring engine (one 0–100 score + "why")
+                              Risk scoring engine  (one 0–100 score/session + "why")
                                         │
                        ┌────────────────┴────────────────┐
                        ▼                                  ▼
-             Adaptive access control              SOC dashboard (Phase 5)
-             MFA / maker-checker / BLOCK          fed by WebSocket
+             Adaptive access control              SOC dashboard (React)
+             step-up MFA / maker-checker / block  gauge, alerts, timeline, heatmap
                                         │
-                          PQC layer (Phase 4): ML-KEM vault
-                          + ML-DSA signed, hash-chained audit log
+                              Post-quantum security layer
+                              ML-KEM-768 vault + ML-DSA-65 signed audit chain
 ```
 
----
-
-## 4. What is DONE (Phases 0–3)
-
-### Phase 0 — Scaffold
-FastAPI app boots, `GET /health` works, venv + Docker + `run.sh` in place, pytest wired up.
-
-### Phase 1 — Data model + simulator
-- **6 ORM entities:** `User`, `Session`, `Event`, `Alert`, `AuditLogEntry`, `VaultItem`
-  (last two ready for the PQC phase).
-- **7 simulated privileged users:** 2 DBAs, 2 sysadmins, 1 network admin, 1 app admin, and
-  **`ext_dsouza`** — a *dormant vendor contractor* who plays the attacker in the demo.
-- **Normal-day simulator:** weekday business-hours sessions, consistent per-user IP/geo/device,
-  routine DB queries (1–200 records), file access, occasional config changes. Deterministic (seeded RNG).
-- **Seed command:** `python -m app.simulator.seed --fresh --days 14` → 7 users, ~666 events, ~90 sessions.
-
-### Phase 2 — Detection + risk scoring
-- **Rule engine** (`app/detection/rules.py`) — 5 rules with weights:
-  dormant-account reactivation (30), privilege escalation (25), after-hours access 00:00–06:00 (20),
-  mass export ≥1000 records (30), access outside role's resources (15).
-- **UEBA** (`app/detection/ueba.py`) — per-session 7-feature vector (login hour, event count,
-  records touched, resource spread, config changes, off-network IP, new device); IsolationForest
-  trained on the normal history; anomaly normalized to 0–100; plus same-role **peer comparison**.
-- **Risk scorer** (`app/detection/score.py`) — rules (capped 65 pts) + UEBA (up to 35 pts)
-  + peer bonus (10 pts), clamped to 100, with a full human-readable reason breakdown.
-- Normal sessions score ~5–25. The attack scores **100**.
-
-### Phase 3 — Attack scenario + adaptive response + live feed
-- **`trigger_attack()`** — one call: at 02:00 the dormant vendor logs in from an unknown VPN IP,
-  escalates privilege on `core-banking-db`, bulk-exports 5000 customer records.
-- **Adaptive access control** (`app/detection/response.py`):
-  score ≥85 → **BLOCK** · ≥70 → **MAKER_CHECKER** · ≥40 → **STEP_UP_MFA** · else ALLOW.
-  Every non-ALLOW decision persists a severity-tagged Alert.
-- **WebSocket live feed** (`/ws/feed`) — pushes `score` and `alert` JSON frames to any
-  connected dashboard the moment detection happens.
-- **Verified live:** `POST /demo/attack` → score 100/100, action BLOCK, CRITICAL alert with 7
-  plain-English reasons, streamed over the WebSocket in real time.
-
-**Test suite: 11/11 passing** — covers simulator realism, every rule, normal-vs-attack scoring,
-response thresholds, and the full attack-over-WebSocket loop.
+For the hackathon, privileged activity is produced by a built-in **simulator** (a real
+bank would feed PAM/SIEM logs into the same Event model — that's the integration story).
 
 ---
 
-## 5. API surface (current)
+## 5. Data model (6 entities — `app/models/entities.py`)
+
+| Entity | Key fields | Purpose |
+|---|---|---|
+| `User` | username, name, role (DBA/SYSADMIN/NET_ADMIN/APP_ADMIN/CONTRACTOR), is_dormant, is_vendor | the privileged workforce |
+| `Session` | user, started_at, ended_at, risk_score, risk_reasons | one login-to-logout window; unit of scoring |
+| `Event` | user, session, action_type (LOGIN/DB_QUERY/DB_EXPORT/CONFIG_CHANGE/PRIV_CHANGE/FILE_ACCESS/LOGOUT), resource, records_touched, source_ip, geo, device, timestamp | one privileged action |
+| `Alert` | user, session, severity (INFO/WARNING/CRITICAL), action_taken, message | detection output shown in SOC feed |
+| `AuditLogEntry` | actor, action, payload, prev_hash, entry_hash, signature | hash-chained + PQC-signed evidence (Phase 4) |
+| `VaultItem` | name, ciphertext, nonce, kem_ciphertext | PQC-wrapped privileged credential (Phase 4) |
+
+### Simulated cast (seeded)
+2 DBAs (rmehta, spatil) · 2 sysadmins (akulkarni, pjoshi) · net admin (vdeshmukh) ·
+app admin (nshinde) · **ext_dsouza — dormant vendor contractor, the demo's attacker**.
+
+`python -m app.simulator.seed --fresh --days 14` generates ~14 weekdays of believable
+normal history: business-hours sessions, consistent per-user IP/geo/device, small DB
+queries (1–200 records), occasional config changes → ~666 events, ~90 sessions.
+
+---
+
+## 6. Detection engine (the core IP)
+
+### 6a. Rule engine — `app/detection/rules.py`
+Each rule returns a reason string + weight when it fires:
+
+| Rule | Fires when | Weight |
+|---|---|---|
+| DORMANT_REACTIVATION | a dormant account logs in | 30 |
+| PRIVILEGE_ESCALATION | any PRIV_CHANGE event in the session | 25 |
+| AFTER_HOURS_ACCESS | privileged actions between 00:00–06:00 | 20 |
+| MASS_EXPORT | ≥ 1000 records touched in one session | 30 |
+| NO_BUSINESS_RELATIONSHIP | touches resources outside the user's role | 15 |
+
+### 6b. UEBA — `app/detection/ueba.py`
+Every session becomes a 7-feature vector:
+`[login_hour, event_count, total_records, distinct_resources, config_changes, offsite_ip, new_device]`
+
+- An **IsolationForest** (100 trees) is trained on all historical normal sessions.
+- A new session's raw anomaly score is normalized to **0–100** against the baseline
+  distribution (median → 0, 1st percentile → 100).
+- **Peer comparison:** the session's records-touched is compared with the same-role
+  average → "touched 5300× more records than CONTRACTOR peers".
+- The model trains in < 1 s at API startup from the DB (no model files to ship).
+
+### 6c. Risk score — `app/detection/score.py`
+
+```
+score = min( rule_weights (capped 65) + 0.35 × UEBA_anomaly + peer_bonus (10 if ≥5× peers), 100 )
+```
+
+Every score ships with a **human-readable reason list** — this is the "why flagged"
+panel on the dashboard and the auditor's explanation. Typical results: normal sessions
+score ~5–25; the demo attack scores **100**.
+
+### 6d. Adaptive response — `app/detection/response.py`
+
+| Score | Action | Severity |
+|---|---|---|
+| ≥ 85 | **BLOCK** the session | CRITICAL |
+| ≥ 70 | MAKER_CHECKER (second-person approval) | CRITICAL |
+| ≥ 40 | STEP_UP_MFA (re-authenticate) | WARNING |
+| < 40 | ALLOW | INFO |
+
+Every non-ALLOW decision persists an `Alert` and is broadcast over the WebSocket.
+
+---
+
+## 7. The demo attack scenario
+
+`POST /demo/attack` (or the dashboard's **Trigger Attack** button) runs `trigger_attack()`:
+
+> **02:00** — dormant vendor account `ext_dsouza` logs in from an unknown VPN IP
+> (103.94.55.7, unregistered laptop) → **02:02** escalates privilege on
+> `core-banking-db` → **02:05** probes 300 records → **02:09** bulk-exports **5000
+> customer records**.
+
+Prahari's live verdict (actual output): **score 100/100 → BLOCK → CRITICAL alert** with
+7 reasons — dormant reactivation, privilege escalation, 4 after-hours actions, 5300
+records over threshold, out-of-role resource access, 100/100 behaviour anomaly, 5300×
+peer deviation — pushed to the dashboard in real time.
+
+---
+
+## 8. Post-quantum security layer (Phase 4 — next up)
+
+- **Why:** "harvest now, decrypt later" — data stolen today can be decrypted once
+  quantum computers mature. Banks need quantum-resistant protection *now* for
+  long-lived secrets and evidence.
+- **Credential vault** (`security/vault.py`): privileged credentials encrypted with
+  AES-256-GCM; the AES key is wrapped using **ML-KEM-768** key encapsulation
+  (NIST FIPS 203). `store_secret()` / `get_secret()`.
+- **Tamper-evident audit log** (`security/audit.py`): every entry carries the hash of
+  the previous entry (blockchain-style chain) and an **ML-DSA-65** signature
+  (NIST FIPS 204). `verify_chain()` walks the whole log.
+- **Live "you can't touch the log" moment:** `POST /demo/tamper` flips one stored audit
+  entry → `verify_chain()` returns **FAIL**, on stage, in one click.
+- All PQC calls go through one abstraction (`security/pqc.py`) so the provider
+  (liboqs-python / quantcrypt) is swappable.
+
+---
+
+## 9. Current API surface
 
 | Endpoint | Purpose |
 |---|---|
 | `GET /health` | liveness |
 | `GET /users` | list privileged users |
-| `GET /sessions/{id}/score` | risk-score any session with reasons |
-| `GET /alerts` | recent alerts |
-| `POST /demo/attack` | trigger the insider-attack demo |
-| `WS /ws/feed` | live score/alert stream |
+| `GET /sessions/{id}/score` | risk-score any session, with reason breakdown |
+| `GET /alerts` | recent alerts (newest first) |
+| `POST /demo/attack` | run the insider-attack scenario end-to-end |
+| `WS /ws/feed` | live JSON stream of `score` and `alert` frames |
+
+Interactive docs: `http://127.0.0.1:8000/docs` (FastAPI auto-generated).
 
 ---
 
-## 6. How to run it yourself
-
-```bash
-git clone <repo>  &&  cd PRAHARI
-./run.sh                                   # creates venv, installs, starts API on :8000
-# in another terminal:
-.venv/Scripts/python -m app.simulator.seed --fresh   # seed 14 days of normal history
-curl -X POST http://127.0.0.1:8000/demo/attack        # watch the insider get caught
-```
-
-Run tests: `.venv/Scripts/python -m pytest`
-
----
-
-## 7. What's NEXT
+## 10. Build plan & status
 
 | Phase | Content | Status |
 |---|---|---|
-| **4** | PQC layer: ML-KEM-768 credential vault, ML-DSA-65 signed + hash-chained audit log, live tamper-detection demo | **next up** |
-| 5 | React SOC dashboard: risk gauge, alert feed, timeline, heatmap, "why flagged" panel, Trigger-Attack + Tamper buttons | pending |
-| 6 | Demo hardening: one-command offline start, `DEMO_SCRIPT.md` click-by-click narration, recorded fallback | pending |
-| 7 | *(optional)* correlate a privileged change with a downstream suspicious transaction | stretch |
+| 0 | Scaffold: FastAPI, /health, venv, Docker, run.sh, pytest | ✅ done |
+| 1 | Data model + normal-day simulator + seeder | ✅ done |
+| 2 | Rule engine + UEBA + 0–100 risk scoring + scoring API | ✅ done |
+| 3 | Attack trigger + adaptive response + WebSocket live feed | ✅ done |
+| 4 | PQC: ML-KEM vault, ML-DSA signed audit chain, tamper demo | ⏳ next |
+| 5 | React SOC dashboard: risk gauge, alert feed, session timeline, user×risk heatmap, "why flagged" panel, Trigger-Attack + Tamper buttons | pending |
+| 6 | Demo hardening: one-command offline start, DEMO_SCRIPT.md narration, recorded fallback | pending |
+| 7 | *(optional stretch)* correlate privileged change → suspicious downstream transaction (PS2 tie-in) | if time |
 
-### Judging weights we're building against
-Business relevance 40% · Security 30% · Uniqueness 15% · UX 5% · Scalability 5% · Ease 5%
-→ priority is **detection correctness + working PQC**, clean but simple UI.
+**Quality gate:** every phase ends with the project running, tests green, and one git
+commit. Test suite currently **11/11 passing** (simulator realism, each rule,
+normal-vs-attack scoring, response thresholds, full attack-over-WebSocket loop).
 
 ---
 
-## 8. Repo map
+## 11. How to run it (any teammate, offline)
 
-```
-app/
-  api/routes.py        REST + WebSocket endpoints
-  api/ws.py            WebSocket broadcast manager
-  detection/rules.py   rule engine (5 rules)
-  detection/ueba.py    IsolationForest + peer baseline
-  detection/score.py   combined 0-100 risk score
-  detection/response.py adaptive access control
-  models/entities.py   all 6 ORM entities
-  simulator/normal.py  normal-day generator
-  simulator/attack.py  the 2 AM insider attack
-  simulator/seed.py    CLI seeder
-tests/                 11 tests, all passing
-frontend/              (Phase 5)
-run.sh, Dockerfile, docker-compose.yml
+```bash
+git clone <repo> && cd PRAHARI
+./run.sh                                      # venv + deps + API on :8000
+# second terminal:
+.venv/Scripts/python -m app.simulator.seed --fresh    # 14 days of normal history
+curl -X POST http://127.0.0.1:8000/demo/attack        # watch the insider get caught
+curl http://127.0.0.1:8000/alerts                     # the CRITICAL BLOCK alert
 ```
 
-Commits are one-per-phase on `master`.
+Tests: `.venv/Scripts/python -m pytest` · Docker: `docker compose up --build`
+
+---
+
+## 12. Repo map
+
+```
+PRAHARI/
+├── app/
+│   ├── main.py               FastAPI app + lifespan (DB init)
+│   ├── config.py             pydantic settings (.env driven)
+│   ├── api/routes.py         REST + WebSocket endpoints
+│   ├── api/ws.py             WebSocket broadcast manager
+│   ├── detection/rules.py    rule engine (5 weighted rules)
+│   ├── detection/ueba.py     IsolationForest + peer baseline
+│   ├── detection/score.py    combined 0–100 risk score + reasons
+│   ├── detection/response.py adaptive access control ladder
+│   ├── models/db.py          engine/session/init
+│   ├── models/entities.py    6 ORM entities
+│   ├── simulator/normal.py   normal banking-day generator
+│   ├── simulator/attack.py   the 2 AM insider attack
+│   ├── simulator/seed.py     CLI seeder
+│   └── security/             (Phase 4: pqc.py, vault.py, audit.py)
+├── frontend/                 (Phase 5: React SOC dashboard)
+├── tests/                    11 tests, all passing
+├── run.sh · Dockerfile · docker-compose.yml · requirements.txt · .env.example
+└── PROJECT_STATUS.md         this document
+```
+
+One commit per phase on `master`.
+
+---
+
+## 13. Scalability & production story (for Q&A)
+
+- SQLite → **Postgres** is a connection-string change (pure ORM, no raw SQL).
+- Event ingestion generalizes to PAM/SIEM feeds (CyberArk, Splunk) mapping into the
+  same `Event` schema; WebSocket fan-out scales behind a message broker.
+- IsolationForest retrains per role/shift nightly; the optional autoencoder upgrade
+  slots behind the same UEBA interface.
+- PQC algorithms are the NIST-standardized ones (FIPS 203/204) already mandated in
+  US federal migration timelines — ahead of RBI's expected quantum-readiness guidance.

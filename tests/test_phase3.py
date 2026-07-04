@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 import app.api.routes as routes
 from app.detection.response import decide, respond
@@ -19,7 +20,10 @@ from app.simulator.normal import seed_users, simulate_history
 
 @pytest.fixture()
 def db():
-    engine = create_engine("sqlite:///:memory:")
+    # TestClient serves the app from a worker thread; StaticPool +
+    # check_same_thread=False lets it share this in-memory DB safely.
+    engine = create_engine("sqlite:///:memory:", poolclass=StaticPool,
+                           connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
     seed_users(session)
@@ -46,11 +50,14 @@ def test_attack_gets_blocked_with_alert(db):
     assert alert.severity == "CRITICAL" and "dormant" in alert.message.lower()
 
 
-def test_demo_attack_endpoint_and_websocket(db, monkeypatch):
+def test_demo_attack_endpoint_and_websocket(db, monkeypatch, tmp_path):
     """Full loop: WS client connected, POST /demo/attack, receive score + alert frames."""
     from app.main import app
+    from app.security import keys
 
-    monkeypatch.setattr(routes, "get_db", lambda: db)
+    monkeypatch.setattr(keys, "KEYS_DIR", tmp_path / "keys")  # isolate keystore
+    # Key the override on the ORIGINAL get_db object that Depends() captured,
+    # otherwise the endpoint silently hits the real file DB.
     app.dependency_overrides[routes.get_db] = lambda: db
     routes._model = UebaModel()  # force retrain on this test DB
     client = TestClient(app)

@@ -95,6 +95,59 @@ async def ws_feed(ws: WebSocket) -> None:
     await feed_endpoint(ws)
 
 
+# --- Dashboard data (Phase 5) ---
+
+@router.get("/dashboard/overview")
+def dashboard_overview(db: OrmSession = Depends(get_db)) -> dict:
+    """Everything the SOC dashboard needs on load: users, scored sessions, heatmap."""
+    import json
+
+    model = get_model(db)
+    sessions = (db.query(Session).filter(Session.ended_at != None)  # noqa: E711
+                .order_by(Session.started_at).all())
+    for sess in sessions:  # score-and-persist any session not yet assessed
+        if sess.risk_reasons is None:
+            events = sorted(sess.events, key=lambda e: e.timestamp)
+            a = assess(sess.user, events, model)
+            sess.risk_score = a.score
+            sess.risk_reasons = json.dumps(a.reasons)
+    db.commit()
+
+    dates = sorted({s.started_at.date() for s in sessions})[-7:]
+    users = db.query(User).all()
+    heatmap = []
+    for u in users:
+        cells = []
+        for d in dates:
+            day = [s.risk_score for s in sessions
+                   if s.user_id == u.id and s.started_at.date() == d]
+            cells.append(round(max(day), 1) if day else None)
+        heatmap.append({"user": u.username, "role": u.role, "cells": cells})
+
+    recent = sessions[-30:]
+    return {
+        "users": [{"id": u.id, "username": u.username, "name": u.name, "role": u.role,
+                   "is_dormant": u.is_dormant, "is_vendor": u.is_vendor} for u in users],
+        "sessions": [{"id": s.id, "user": s.user.username, "role": s.user.role,
+                      "started_at": s.started_at.isoformat(),
+                      "score": round(s.risk_score, 1),
+                      "reasons": json.loads(s.risk_reasons or "[]")}
+                     for s in reversed(recent)],
+        "heatmap": {"dates": [d.isoformat() for d in dates], "rows": heatmap},
+        "latest_score": round(recent[-1].risk_score, 1) if recent else 0,
+    }
+
+
+@router.get("/sessions/{session_id}/events")
+def session_events(session_id: int, db: OrmSession = Depends(get_db)) -> list[dict]:
+    sess = db.get(Session, session_id)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    return [{"t": e.timestamp.isoformat(), "action": e.action_type, "resource": e.resource,
+             "records": e.records_touched, "ip": e.source_ip, "device": e.device}
+            for e in sorted(sess.events, key=lambda e: e.timestamp)]
+
+
 # --- Post-quantum security layer (Phase 4) ---
 
 class SecretIn(BaseModel):

@@ -25,9 +25,9 @@ Or with Docker: `docker compose up --build`
 ## Status
 
 - [x] Phase 0 — scaffold, `/health`
-- [ ] Phase 1 — data model + normal-day simulator
-- [ ] Phase 2 — rules + UEBA + risk scoring
-- [ ] Phase 3 — attack scenario + adaptive response + WebSocket
-- [ ] Phase 4 — PQC vault + signed audit chain
+- [x] Phase 1 — data model + normal-day simulator
+- [x] Phase 2 — rules + UEBA + risk scoring
+- [x] Phase 3 — attack scenario + adaptive response + WebSocket
+- [x] Phase 4 — PQC vault + signed audit chain (liboqs: ML-KEM-768 + ML-DSA-65)
 - [ ] Phase 5 — SOC dashboard
 - [ ] Phase 6 — demo hardening

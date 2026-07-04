@@ -55,7 +55,7 @@ the proof quantum-safe.*
 | 3 | AI-driven behavioural analysis | IsolationForest UEBA + peer baselines | ✅ done |
 | 4 | Risk-based access control | Score→action ladder: MFA / maker-checker / block | ✅ done |
 | 5 | Protect critical admin systems | Blocks the session before the export completes | ✅ done |
-| 6 | Quantum-proof cryptography | ML-KEM vault + ML-DSA signed audit chain | ⏳ Phase 4 |
+| 6 | Quantum-proof cryptography | ML-KEM vault + ML-DSA signed audit chain | ✅ done |
 
 ### Judging weights we build against
 Business relevance **40%** · Security **30%** · Uniqueness **15%** · UX 5% · Scalability 5% · Ease 5%
@@ -233,8 +233,8 @@ Interactive docs: `http://127.0.0.1:8000/docs` (FastAPI auto-generated).
 | 1 | Data model + normal-day simulator + seeder | ✅ done |
 | 2 | Rule engine + UEBA + 0–100 risk scoring + scoring API | ✅ done |
 | 3 | Attack trigger + adaptive response + WebSocket live feed | ✅ done |
-| 4 | PQC: ML-KEM vault, ML-DSA signed audit chain, tamper demo | ⏳ next |
-| 5 | React SOC dashboard: risk gauge, alert feed, session timeline, user×risk heatmap, "why flagged" panel, Trigger-Attack + Tamper buttons | pending |
+| 4 | PQC: ML-KEM vault, ML-DSA signed audit chain, tamper demo | ✅ done |
+| 5 | React SOC dashboard: risk gauge, alert feed, session timeline, user×risk heatmap, "why flagged" panel, Trigger-Attack + Tamper buttons | ⏳ next |
 | 6 | Demo hardening: one-command offline start, DEMO_SCRIPT.md narration, recorded fallback | pending |
 | 7 | *(optional stretch)* correlate privileged change → suspicious downstream transaction (PS2 tie-in) | if time |
 

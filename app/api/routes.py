@@ -2,12 +2,15 @@
 from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from sqlalchemy.orm import Session as OrmSession
 
+from pydantic import BaseModel
+
 from app.api.ws import feed_endpoint, manager
 from app.detection.response import respond
 from app.detection.score import assess
 from app.detection.ueba import UebaModel
 from app.models.db import SessionLocal
-from app.models.entities import Alert, Session, User
+from app.models.entities import Alert, AuditLogEntry, Session, User
+from app.security import audit, pqc, vault
 from app.simulator.attack import trigger_attack
 
 router = APIRouter()
@@ -65,6 +68,9 @@ async def demo_attack(db: OrmSession = Depends(get_db)) -> dict:
     sess.risk_score = assessment.score
     decision = respond(db, sess.user, sess, assessment)
     db.commit()
+    audit.append_entry(db, actor="prahari-engine", action="THREAT_DETECTED",
+                       payload=f"user={sess.user.username} session={sess.id} "
+                               f"score={assessment.score:.0f} action={decision.action}")
 
     payload = {
         "type": "attack_detected",
@@ -87,3 +93,66 @@ async def demo_attack(db: OrmSession = Depends(get_db)) -> dict:
 @router.websocket("/ws/feed")
 async def ws_feed(ws: WebSocket) -> None:
     await feed_endpoint(ws)
+
+
+# --- Post-quantum security layer (Phase 4) ---
+
+class SecretIn(BaseModel):
+    name: str
+    secret: str
+
+
+@router.get("/pqc/info")
+def pqc_info() -> dict:
+    return {"provider": pqc.PROVIDER, "kem": pqc.KEM_ALG, "signature": pqc.SIG_ALG}
+
+
+@router.post("/vault/secrets")
+def vault_store(body: SecretIn, db: OrmSession = Depends(get_db)) -> dict:
+    item = vault.store_secret(db, body.name, body.secret)
+    audit.append_entry(db, actor="vault", action="SECRET_STORED", payload=f"name={body.name}")
+    return {"name": item.name, "kem": pqc.KEM_ALG, "stored": True}
+
+
+@router.get("/vault/secrets/{name}")
+def vault_get(name: str, db: OrmSession = Depends(get_db)) -> dict:
+    try:
+        secret = vault.get_secret(db, name)
+    except KeyError:
+        raise HTTPException(404, f"no vault item named '{name}'")
+    audit.append_entry(db, actor="vault", action="SECRET_ACCESSED", payload=f"name={name}")
+    return {"name": name, "secret": secret}
+
+
+@router.get("/audit")
+def audit_list(limit: int = 100, db: OrmSession = Depends(get_db)) -> list[dict]:
+    entries = db.query(AuditLogEntry).order_by(AuditLogEntry.id.desc()).limit(limit).all()
+    return [{"id": e.id, "timestamp": e.timestamp.isoformat(), "actor": e.actor,
+             "action": e.action, "payload": e.payload, "prev_hash": e.prev_hash,
+             "entry_hash": e.entry_hash} for e in entries]
+
+
+@router.get("/audit/verify")
+def audit_verify(db: OrmSession = Depends(get_db)) -> dict:
+    report = audit.verify_chain(db)
+    return {"ok": report.ok, "entries_checked": report.entries_checked,
+            "first_bad_id": report.first_bad_id, "problem": report.problem,
+            "signature_alg": pqc.SIG_ALG}
+
+
+@router.post("/demo/tamper")
+async def demo_tamper(db: OrmSession = Depends(get_db)) -> dict:
+    """Maliciously edit one audit entry, then re-verify — the chain must FAIL."""
+    entry = db.query(AuditLogEntry).order_by(AuditLogEntry.id).first()
+    if entry is None:
+        raise HTTPException(400, "audit log is empty — trigger the attack first")
+    original = entry.payload
+    entry.payload = original.replace("BLOCK", "ALLOW") if "BLOCK" in original \
+        else original + " [EDITED]"
+    db.commit()
+    report = audit.verify_chain(db)
+    result = {"tampered_entry_id": entry.id, "original_payload": original,
+              "tampered_payload": entry.payload, "chain_ok": report.ok,
+              "problem": report.problem, "first_bad_id": report.first_bad_id}
+    await manager.broadcast({"type": "audit_tamper", **result})
+    return result

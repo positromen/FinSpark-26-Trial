@@ -3,5 +3,7 @@ uvicorn[standard]
 sqlalchemy
 pydantic-settings
 scikit-learn
+liboqs-python
+cryptography
 pytest
 httpx

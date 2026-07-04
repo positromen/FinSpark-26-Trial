@@ -234,8 +234,8 @@ Interactive docs: `http://127.0.0.1:8000/docs` (FastAPI auto-generated).
 | 2 | Rule engine + UEBA + 0–100 risk scoring + scoring API | ✅ done |
 | 3 | Attack trigger + adaptive response + WebSocket live feed | ✅ done |
 | 4 | PQC: ML-KEM vault, ML-DSA signed audit chain, tamper demo | ✅ done |
-| 5 | React SOC dashboard: risk gauge, alert feed, session timeline, user×risk heatmap, "why flagged" panel, Trigger-Attack + Tamper buttons | ⏳ next |
-| 6 | Demo hardening: one-command offline start, DEMO_SCRIPT.md narration, recorded fallback | pending |
+| 5 | React SOC dashboard: risk gauge, alert feed, session timeline, user×risk heatmap, "why flagged" panel, Trigger-Attack + Tamper buttons | ✅ done |
+| 6 | Demo hardening: one-command offline start, DEMO_SCRIPT.md narration, recorded fallback | ✅ done |
 | 7 | *(optional stretch)* correlate privileged change → suspicious downstream transaction (PS2 tie-in) | if time |
 
 **Quality gate:** every phase ends with the project running, tests green, and one git

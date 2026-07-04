@@ -9,12 +9,14 @@ audit log with post-quantum cryptography (ML-KEM-768 / ML-DSA-65).
 
 ## Quick start
 
-```bash
-./run.sh
-# then open http://127.0.0.1:8000/health
+```powershell
+.\run.ps1            # Windows PowerShell  (or ./run.sh in Git Bash / Linux)
+# then open http://127.0.0.1:8000  — the SOC dashboard
 ```
 
-Or with Docker: `docker compose up --build`
+One command: venv + deps + seeded DB + dashboard + API. `-Reset` (or
+`--reset`) wipes the DB for a clean demo state. See `DEMO_SCRIPT.md` for the
+full 5-minute demo narration. Docker alternative: `docker compose up --build`
 
 ## Layout
 
@@ -29,5 +31,5 @@ Or with Docker: `docker compose up --build`
 - [x] Phase 2 — rules + UEBA + risk scoring
 - [x] Phase 3 — attack scenario + adaptive response + WebSocket
 - [x] Phase 4 — PQC vault + signed audit chain (liboqs: ML-KEM-768 + ML-DSA-65)
-- [ ] Phase 5 — SOC dashboard
-- [ ] Phase 6 — demo hardening
+- [x] Phase 5 — SOC dashboard (React + Vite + Tailwind + Recharts)
+- [x] Phase 6 — demo hardening (one-command offline start, DEMO_SCRIPT.md)

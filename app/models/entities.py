@@ -70,7 +70,7 @@ class Alert(Base):
     severity: Mapped[str] = mapped_column(String(16))  # INFO/WARNING/CRITICAL
     action_taken: Mapped[str] = mapped_column(String(32), default="NONE")  # ALLOW/STEP_UP_MFA/MAKER_CHECKER/BLOCK
     message: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
 class AuditLogEntry(Base):
@@ -79,7 +79,7 @@ class AuditLogEntry(Base):
     __tablename__ = "audit_log"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     actor: Mapped[str] = mapped_column(String(64))
     action: Mapped[str] = mapped_column(String(64))
     payload: Mapped[str] = mapped_column(Text)
@@ -98,4 +98,4 @@ class VaultItem(Base):
     ciphertext: Mapped[str] = mapped_column(Text)
     nonce: Mapped[str] = mapped_column(String(64))
     kem_ciphertext: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

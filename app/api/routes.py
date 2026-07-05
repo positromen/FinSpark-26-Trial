@@ -9,14 +9,20 @@ from app.api.ws import feed_endpoint, manager
 from app.config import settings
 from app.detection import live
 from app.detection.response import respond
+from app.detection.rules import dominant_insider_type, evaluate
 from app.detection.score import assess
 from app.detection.ueba import UebaModel
-from app.models.entities import Alert, AuditLogEntry, Session, User
+from app.models.entities import Alert, AuditLogEntry, Session, SessionCommand, User
+from app.pam import access_review
 from app.security import audit, pqc, vault
 from app.security.auth import (create_token, current_user, get_db, require_analyst,
                                verify_password)
-from app.simulator.attack import trigger_attack
+from app.simulator.attack import (trigger_compromised, trigger_malicious,
+                                   trigger_negligent)
 from app.simulator.normal import RESOURCES_BY_ROLE
+
+SCENARIOS = {"malicious": trigger_malicious, "compromised": trigger_compromised,
+             "negligent": trigger_negligent}
 
 router = APIRouter()
 _model = UebaModel()
@@ -48,12 +54,13 @@ async def _broadcast_activity(user: User, sess: Session, outcome: live.ActionOut
         "role": user.role, "action": action, "resource": resource,
         "score": round(outcome.score, 1), "decision": outcome.decision,
         "allowed": outcome.allowed, "status": outcome.session_status,
-        "reasons": outcome.reasons,
+        "insider_type": outcome.insider_type, "reasons": outcome.reasons,
     })
     if outcome.decision != "ALLOW":
         await manager.broadcast({
             "type": "alert", "session_id": sess.id, "user": user.username,
             "role": user.role, "severity": outcome.severity, "action": outcome.decision,
+            "insider_type": outcome.insider_type,
             "score": round(outcome.score, 1), "reasons": outcome.reasons,
         })
 
@@ -202,16 +209,20 @@ def soc_overview(user: User = Depends(require_analyst),
 def _live_sessions(db: OrmSession) -> list[dict]:
     rows = (db.query(Session).filter(Session.status.in_(["ACTIVE", "BLOCKED"]))
             .order_by(Session.id.desc()).all())
-    return [{"id": s.id, "user": s.user.username, "name": s.user.name, "role": s.user.role,
-             "status": s.status, "score": round(s.risk_score, 1),
-             "source_ip": s.source_ip, "geo": s.geo, "device": s.device,
-             "started_at": s.started_at.isoformat(),
-             "reasons": json.loads(s.risk_reasons or "[]"),
-             "events": [{"t": e.timestamp.isoformat(), "action": e.action_type,
-                         "resource": e.resource, "records": e.records_touched,
-                         "ip": e.source_ip, "device": e.device}
-                        for e in sorted(s.events, key=lambda e: e.timestamp)]}
-            for s in rows]
+    out = []
+    for s in rows:
+        evs = sorted(s.events, key=lambda e: e.timestamp)
+        out.append({
+            "id": s.id, "user": s.user.username, "name": s.user.name, "role": s.user.role,
+            "status": s.status, "score": round(s.risk_score, 1),
+            "insider_type": dominant_insider_type(evaluate(s.user, evs)),
+            "source_ip": s.source_ip, "geo": s.geo, "device": s.device,
+            "started_at": s.started_at.isoformat(),
+            "reasons": json.loads(s.risk_reasons or "[]"),
+            "events": [{"t": e.timestamp.isoformat(), "action": e.action_type,
+                        "resource": e.resource, "records": e.records_touched,
+                        "ip": e.source_ip, "device": e.device} for e in evs]})
+    return out
 
 
 @router.get("/soc/live")
@@ -225,7 +236,32 @@ def soc_alerts(limit: int = 50, user: User = Depends(require_analyst),
     alerts = db.query(Alert).order_by(Alert.created_at.desc()).limit(limit).all()
     return [{"id": a.id, "user_id": a.user_id, "session_id": a.session_id,
              "severity": a.severity, "action_taken": a.action_taken,
+             "insider_type": a.insider_type,
              "message": a.message, "created_at": a.created_at.isoformat()} for a in alerts]
+
+
+@router.get("/soc/access-review")
+def soc_access_review(user: User = Depends(require_analyst),
+                      db: OrmSession = Depends(get_db)) -> list[dict]:
+    """PAM access-review table: privileged accounts flagged dormant / vendor / expired."""
+    return access_review(db)
+
+
+@router.get("/soc/sessions/{session_id}/commands")
+def soc_session_commands(session_id: int, user: User = Depends(require_analyst),
+                         db: OrmSession = Depends(get_db)) -> dict:
+    """Privileged-session recording: the replayable command trail of a session."""
+    sess = db.get(Session, session_id)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    cmds = (db.query(SessionCommand).filter_by(session_id=session_id)
+            .order_by(SessionCommand.timestamp, SessionCommand.id).all())
+    return {"session_id": session_id, "user": sess.user.username,
+            "role": sess.user.role, "status": sess.status,
+            "source_ip": sess.source_ip, "device": sess.device, "geo": sess.geo,
+            "commands": [{"t": c.timestamp.isoformat(), "command": c.command,
+                          "action": c.action_type, "resource": c.resource,
+                          "outcome": c.outcome} for c in cmds]}
 
 
 @router.post("/soc/sessions/{session_id}/approve")
@@ -251,12 +287,9 @@ def soc_session_events(session_id: int, user: User = Depends(require_analyst),
             for e in sorted(sess.events, key=lambda e: e.timestamp)]
 
 
-@router.post("/demo/attack")
-async def demo_attack(user: User = Depends(require_analyst),
-                      db: OrmSession = Depends(get_db)) -> dict:
-    """Scripted fallback: inject the full 2 AM attack in one call (for the SOC view)."""
-    model = get_model(db)
-    sess = trigger_attack(db)
+async def _run_scenario(db: OrmSession, kind: str) -> dict:
+    model = get_model(db)  # train on clean history BEFORE injecting the scenario
+    sess = SCENARIOS[kind](db)
     events = sorted(sess.events, key=lambda e: e.timestamp)
     assessment = assess(sess.user, events, model)
     sess.risk_score = assessment.score
@@ -265,12 +298,30 @@ async def demo_attack(user: User = Depends(require_analyst),
     db.commit()
     audit.append_entry(db, actor="prahari-engine", action="THREAT_DETECTED",
                        payload=f"user={sess.user.username} session={sess.id} "
-                               f"score={assessment.score:.0f} action={decision.action}")
-    payload = {"session_id": sess.id, "user": sess.user.username,
+                               f"type={assessment.insider_type} score={assessment.score:.0f} "
+                               f"action={decision.action}")
+    payload = {"scenario": kind, "session_id": sess.id, "user": sess.user.username,
+               "role": sess.user.role, "insider_type": assessment.insider_type,
                "score": round(assessment.score, 1), "action": decision.action,
                "severity": decision.severity, "reasons": assessment.reasons}
     await manager.broadcast({"type": "alert", **payload})
     return payload
+
+
+@router.post("/demo/scenario/{kind}")
+async def demo_scenario(kind: str, user: User = Depends(require_analyst),
+                        db: OrmSession = Depends(get_db)) -> dict:
+    """Inject one scripted insider scenario: malicious / compromised / negligent."""
+    if kind not in SCENARIOS:
+        raise HTTPException(400, f"unknown scenario '{kind}'")
+    return await _run_scenario(db, kind)
+
+
+@router.post("/demo/attack")
+async def demo_attack(user: User = Depends(require_analyst),
+                      db: OrmSession = Depends(get_db)) -> dict:
+    """Backwards-compatible alias for the malicious scenario."""
+    return await _run_scenario(db, "malicious")
 
 
 @router.websocket("/ws/feed")

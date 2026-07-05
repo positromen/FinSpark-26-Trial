@@ -22,18 +22,34 @@ class ResponseDecision:
     alert_id: int | None
 
 
-def decide(score: float) -> tuple[str, str]:
-    """Return (action, severity) for a 0-100 risk score."""
-    for floor, action, severity in THRESHOLDS:
+NEGLIGENT_REVIEW_FLOOR = 50  # a flagged-negligent session at/above this needs human review
+
+
+def decide(score: float, insider_type: str | None = None) -> tuple[str, str]:
+    """Return (action, severity) for a 0-100 risk score, refined by insider type.
+
+    Response is *risk-based on the nature of the risk*, not the score alone:
+    negligence is a control failure to remediate with a human second-check, never an
+    attack to hard-block — so a negligent session is floored to maker-checker review
+    and never escalated to an automated BLOCK.
+    """
+    action, severity = "ALLOW", "INFO"
+    for floor, act, sev in THRESHOLDS:
         if score >= floor:
-            return action, severity
-    return "ALLOW", "INFO"
+            action, severity = act, sev
+            break
+    if insider_type == "negligent":
+        if action == "BLOCK":                       # ceiling: never auto-block negligence
+            action, severity = "MAKER_CHECKER", "CRITICAL"
+        elif action == "STEP_UP_MFA" and score >= NEGLIGENT_REVIEW_FLOOR:
+            action, severity = "MAKER_CHECKER", "WARNING"  # floor: send for review
+    return action, severity
 
 
 def respond(db: OrmSession, user: User, session: Session,
             assessment: RiskAssessment) -> ResponseDecision:
     """Apply the adaptive-response policy and persist an Alert (except plain ALLOW)."""
-    action, severity = decide(assessment.score)
+    action, severity = decide(assessment.score, assessment.insider_type)
     alert_id = None
     if action != "ALLOW":
         alert = Alert(
@@ -41,6 +57,7 @@ def respond(db: OrmSession, user: User, session: Session,
             session_id=session.id,
             severity=severity,
             action_taken=action,
+            insider_type=assessment.insider_type,
             message=(f"Risk {assessment.score:.0f}/100 for '{user.username}' -> {action}. "
                      + " | ".join(assessment.reasons)),
         )

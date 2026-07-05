@@ -22,9 +22,11 @@ def db():
 
 def test_seed_users_idempotent(db):
     users = seed_users(db)
-    assert len(seed_users(db)) == len(users) == 8  # 7 employees + 1 SOC analyst
+    assert len(seed_users(db)) == len(users) == 9  # 8 employees + 1 SOC analyst
     dormant = [u for u in users if u.is_dormant]
     assert len(dormant) == 1 and dormant[0].is_vendor
+    expired = [u for u in users if u.access_expires_at]
+    assert {u.username for u in expired} == {"ext_dsouza", "ext_rao"}
     analysts = [u for u in users if u.account_type == "ANALYST"]
     assert len(analysts) == 1 and analysts[0].username == "soc_admin"
     assert all(u.password_hash for u in users)  # everyone can authenticate

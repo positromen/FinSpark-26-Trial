@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session as OrmSession
 
 from app.models.entities import Event, Session, User
+from app.pam import record_command
 
 RESOURCES_BY_ROLE: dict[str, list[str]] = {
     "DBA": ["core-banking-db", "loans-db", "cards-db"],
@@ -29,11 +30,17 @@ DEFAULT_USERS: list[dict] = [
     {"username": "vdeshmukh", "name": "Vikram Deshmukh", "role": "NET_ADMIN"},
     {"username": "nshinde", "name": "Neha Shinde", "role": "APP_ADMIN"},
     {"username": "ext_dsouza", "name": "Kevin D'Souza (Vendor)", "role": "CONTRACTOR",
-     "is_vendor": True, "is_dormant": True},  # dormant vendor account — the attacker
+     "is_vendor": True, "is_dormant": True},  # dormant vendor — the malicious attacker
+    {"username": "ext_rao", "name": "Anil Rao (Vendor)", "role": "CONTRACTOR",
+     "is_vendor": True},  # active vendor whose access has lapsed — negligence case
     # SOC operator who logs into the Prahari console itself.
     {"username": "soc_admin", "name": "Meera Nair (SOC)", "role": "SOC_ANALYST",
      "account_type": "ANALYST"},
 ]
+
+# Vendor grants that have already lapsed (days before "now"). Feeds the PAM
+# access-review panel and the "expired vendor access still in use" negligence rule.
+EXPIRED_ACCESS_DAYS_AGO = {"ext_dsouza": 120, "ext_rao": 18}
 
 
 def seed_users(db: OrmSession) -> list[User]:
@@ -46,6 +53,12 @@ def seed_users(db: OrmSession) -> list[User]:
     for spec in DEFAULT_USERS:
         if spec["username"] not in existing:
             db.add(User(password_hash=pw_hash, **spec))
+    db.commit()
+    now = datetime.now()
+    for username, days in EXPIRED_ACCESS_DAYS_AGO.items():
+        u = db.query(User).filter_by(username=username).first()
+        if u and u.access_expires_at is None:
+            u.access_expires_at = now - timedelta(days=days)
     db.commit()
     return db.query(User).all()
 
@@ -79,19 +92,25 @@ def simulate_day(db: OrmSession, day: datetime, rng: random.Random) -> int:
             db.add(Event(user_id=user.id, session_id=sess.id, action_type="LOGIN",
                          resource="pam-gateway", records_touched=0,
                          source_ip=ip, geo=geo, device=device, timestamp=t))
+            record_command(db, sess.id, "LOGIN", "pam-gateway", 0, t, user.username)
             count += 1
             for _ in range(rng.randint(3, 8)):
                 t += timedelta(minutes=rng.randint(2, 25))
                 action = rng.choice(ROUTINE_ACTIONS)
-                records = rng.randint(1, 200) if action == "DB_QUERY" else 0
+                # Cap per-query volume so a routine multi-query session can never sum
+                # to the mass-export threshold (1000) — no false malicious flags.
+                records = rng.randint(1, 100) if action == "DB_QUERY" else 0
+                resource = rng.choice(resources)
                 db.add(Event(user_id=user.id, session_id=sess.id, action_type=action,
-                             resource=rng.choice(resources), records_touched=records,
+                             resource=resource, records_touched=records,
                              source_ip=ip, geo=geo, device=device, timestamp=t))
+                record_command(db, sess.id, action, resource, records, t, user.username)
                 count += 1
             t += timedelta(minutes=rng.randint(2, 10))
             db.add(Event(user_id=user.id, session_id=sess.id, action_type="LOGOUT",
                          resource="pam-gateway", records_touched=0,
                          source_ip=ip, geo=geo, device=device, timestamp=t))
+            record_command(db, sess.id, "LOGOUT", "pam-gateway", 0, t, user.username)
             sess.ended_at = t
             count += 1
     db.commit()

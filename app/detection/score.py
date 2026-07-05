@@ -1,7 +1,7 @@
 """Risk scoring engine: combine rule hits + UEBA anomaly into one 0-100 score."""
 from dataclasses import dataclass, field
 
-from app.detection.rules import RuleHit, evaluate
+from app.detection.rules import RuleHit, dominant_insider_type, evaluate
 from app.detection.ueba import UebaModel
 from app.models.entities import Event, User
 
@@ -10,7 +10,9 @@ from app.models.entities import Event, User
 # a single-rule legitimate anomaly is well under it, so raising it does not make
 # ordinary activity block — it only sharpens clearly-malicious combinations.
 RULE_CAP = 80
-UEBA_WEIGHT = 0.35  # up to 35 points from behavioural anomaly
+# UEBA is a *secondary* nudge (max 25 pts): the rule engine — which is stable and
+# explainable — should place a session's band; the behavioural model refines within it.
+UEBA_WEIGHT = 0.25
 PEER_BONUS = 10  # extra if wildly above same-role peers
 
 
@@ -20,13 +22,15 @@ class RiskAssessment:
     rule_hits: list[RuleHit] = field(default_factory=list)
     ueba_summary: str = ""
     reasons: list[str] = field(default_factory=list)
+    insider_type: str | None = None  # malicious / negligent / compromised
 
     def as_dict(self) -> dict:
         return {
             "score": round(self.score, 1),
+            "insider_type": self.insider_type,
             "reasons": self.reasons,
-            "rules": [{"rule": h.rule, "reason": h.reason, "weight": h.weight}
-                      for h in self.rule_hits],
+            "rules": [{"rule": h.rule, "reason": h.reason, "weight": h.weight,
+                       "insider_type": h.insider_type} for h in self.rule_hits],
             "ueba": self.ueba_summary,
         }
 
@@ -48,4 +52,4 @@ def assess(user: User, events: list[Event], model: UebaModel) -> RiskAssessment:
         reasons.append(f"far above {user.role} peer group (x{ueba.peer_deviation:.0f})")
 
     return RiskAssessment(score=score, rule_hits=hits, ueba_summary=ueba.summary,
-                          reasons=reasons)
+                          reasons=reasons, insider_type=dominant_insider_type(hits))

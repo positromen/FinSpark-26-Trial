@@ -20,6 +20,8 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_dormant: Mapped[bool] = mapped_column(Boolean, default=False)
     is_vendor: Mapped[bool] = mapped_column(Boolean, default=False)
+    # PAM access control: when a (vendor/contractor) grant lapses. NULL = permanent staff.
+    access_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     events: Mapped[list["Event"]] = relationship(back_populates="user")
     sessions: Mapped[list["Session"]] = relationship(back_populates="user")
@@ -43,6 +45,23 @@ class Session(Base):
 
     user: Mapped[User] = relationship(back_populates="sessions")
     events: Mapped[list["Event"]] = relationship(back_populates="session")
+    commands: Mapped[list["SessionCommand"]] = relationship(back_populates="session")
+
+
+class SessionCommand(Base):
+    """Privileged-session recording: the replayable command trail of a session (PAM)."""
+
+    __tablename__ = "session_commands"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
+    timestamp: Mapped[datetime] = mapped_column(DateTime)
+    command: Mapped[str] = mapped_column(Text)          # e.g. "SELECT * FROM customers LIMIT 5000"
+    action_type: Mapped[str] = mapped_column(String(32))
+    resource: Mapped[str] = mapped_column(String(128))
+    outcome: Mapped[str] = mapped_column(String(16), default="EXECUTED")  # EXECUTED / DENIED / HELD
+
+    session: Mapped[Session] = relationship(back_populates="commands")
 
 
 class Event(Base):
@@ -75,6 +94,7 @@ class Alert(Base):
     session_id: Mapped[int | None] = mapped_column(ForeignKey("sessions.id"), nullable=True)
     severity: Mapped[str] = mapped_column(String(16))  # INFO/WARNING/CRITICAL
     action_taken: Mapped[str] = mapped_column(String(32), default="NONE")  # ALLOW/STEP_UP_MFA/MAKER_CHECKER/BLOCK
+    insider_type: Mapped[str | None] = mapped_column(String(16), nullable=True)  # malicious/negligent/compromised
     message: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 

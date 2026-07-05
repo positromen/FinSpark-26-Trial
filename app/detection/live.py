@@ -16,6 +16,7 @@ from app.detection.response import decide
 from app.detection.score import assess
 from app.detection.ueba import UebaModel
 from app.models.entities import Alert, Event, Session, User
+from app.pam import record_command
 
 # Catalogue of actions an employee can perform in the portal.
 # records_touched is a sensible default the UI can override (e.g. export size).
@@ -38,6 +39,7 @@ class ActionOutcome:
     message: str
     event_id: int | None
     session_status: str
+    insider_type: str | None = None  # malicious / negligent / compromised
 
 
 def open_session(db: OrmSession, user: User, source_ip: str, geo: str,
@@ -57,9 +59,11 @@ def open_session(db: OrmSession, user: User, source_ip: str, geo: str,
                    source_ip=source_ip, geo=geo, device=device)
     db.add(sess)
     db.flush()
+    now = datetime.now()
     db.add(Event(user_id=user.id, session_id=sess.id, action_type="LOGIN",
                  resource="pam-gateway", records_touched=0, source_ip=source_ip,
-                 geo=geo, device=device, timestamp=datetime.now()))
+                 geo=geo, device=device, timestamp=now))
+    record_command(db, sess.id, "LOGIN", "pam-gateway", 0, now, user.username)
     db.commit()
     return sess
 
@@ -90,7 +94,7 @@ def perform_action(db: OrmSession, model: UebaModel, sess: Session, user: User,
     candidate = _candidate_event(sess, user, action, resource, records)
     events = sorted(sess.events, key=lambda e: e.timestamp) + [candidate]
     assessment = assess(user, events, model)
-    decision, severity = decide(assessment.score)
+    decision, severity = decide(assessment.score, assessment.insider_type)
 
     sess.risk_score = assessment.score
     sess.risk_reasons = json.dumps(assessment.reasons)
@@ -121,22 +125,30 @@ def perform_action(db: OrmSession, model: UebaModel, sess: Session, user: User,
         sess.ended_at = datetime.now()
         message = "BLOCKED — malicious privileged activity detected and stopped."
 
+    # Record this action in the privileged-session transcript (PAM session recording).
+    outcome = "EXECUTED" if allowed else ("DENIED" if decision == "BLOCK" else "HELD")
+    record_command(db, sess.id, action, resource, records, datetime.now(),
+                   user.username, outcome=outcome)
+
     if decision != "ALLOW" and not (decision == "STEP_UP_MFA" and mfa_ok):
         db.add(Alert(user_id=user.id, session_id=sess.id, severity=severity,
-                     action_taken=decision,
+                     action_taken=decision, insider_type=assessment.insider_type,
                      message=f"{user.username}: {action} on {resource} -> {decision} "
                              f"(risk {assessment.score:.0f}). " + " | ".join(assessment.reasons)))
     db.commit()
 
     return ActionOutcome(allowed, decision, severity, assessment.score,
-                         assessment.reasons, message, event_id, sess.status)
+                         assessment.reasons, message, event_id, sess.status,
+                         insider_type=assessment.insider_type)
 
 
 def close_session(db: OrmSession, sess: Session) -> None:
     if sess.status == "ACTIVE":
+        now = datetime.now()
         db.add(Event(user_id=sess.user_id, session_id=sess.id, action_type="LOGOUT",
                      resource="pam-gateway", records_touched=0, source_ip=sess.source_ip,
-                     geo=sess.geo, device=sess.device, timestamp=datetime.now()))
+                     geo=sess.geo, device=sess.device, timestamp=now))
+        record_command(db, sess.id, "LOGOUT", "pam-gateway", 0, now, sess.user.username)
         sess.status = "CLOSED"
-        sess.ended_at = datetime.now()
+        sess.ended_at = now
         db.commit()

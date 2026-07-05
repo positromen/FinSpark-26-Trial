@@ -87,7 +87,33 @@ Point to the red connection banner, then:
 - Try any other action → still blocked. "The account is locked. He can't even
   log in again to retry."
 
-### 3:30 — Watch it on the SOC side (left window)
+### 3:00 — The other two insider types (SOC buttons)
+
+The problem statement names three insider types — **malicious, negligent, compromised**.
+The header has a one-click button for each; they drive *different* responses:
+
+- **☠ Malicious** → the 2 AM dormant-vendor theft you just saw live → **BLOCK**.
+- **🎭 Compromised** → click it: a *normal* sysadmin's account suddenly logs in from
+  Singapore on an unknown laptop and fires six actions in 90 seconds. Prahari reads it
+  as account takeover → **STEP-UP MFA**. The alert is tagged `compromised`.
+- **⚠ Negligent** → click it: an active vendor whose access *expired 18 days ago* keeps
+  pulling reports from a personal laptop. No malice — a control failure → **MAKER-CHECKER**
+  review (Prahari never hard-blocks negligence, it routes it to a human). Tagged `negligent`.
+
+> "Same engine, three different responses, each labelled with *what kind* of insider it is."
+
+### 3:30 — The PAM surface (scroll down, left window)
+
+> "This is privileged-access *management*, not just detection."
+
+- **PAM access review** (bottom panel): every privileged account with standing-risk flags —
+  ext_dsouza is DORMANT + VENDOR + EXPIRED (HIGH), ext_rao is VENDOR + EXPIRED (HIGH). This
+  is the lingering-access problem surfaced before anything even happens.
+- **Session recording** (replay panel): click any session → its full recorded command trail
+  replays like a terminal. On Kevin's blocked session you can see the export line marked
+  **DENIED** and struck through — the action that never completed.
+
+### 3:45 — Watch the malicious case on the SOC side (left window)
 
 > "Everything just lit up here in real time."
 

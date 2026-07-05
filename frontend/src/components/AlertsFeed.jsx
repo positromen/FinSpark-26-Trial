@@ -2,6 +2,7 @@ import { riskBand } from '../api.js'
 
 const SEV_ICON = { CRITICAL: '⛔', WARNING: '⚠', INFO: 'ℹ' }
 const SEV_COLOR = { CRITICAL: 'var(--critical)', WARNING: 'var(--warning)', INFO: 'var(--good)' }
+const TYPE_COLOR = { malicious: 'var(--critical)', compromised: 'var(--accent)', negligent: 'var(--warning)' }
 
 export default function AlertsFeed({ alerts, flashId }) {
   if (!alerts.length) {
@@ -24,6 +25,12 @@ export default function AlertsFeed({ alerts, flashId }) {
                   style={{ background: 'var(--grid)', color: 'var(--ink-2)' }}>
               {a.action_taken}
             </span>
+            {a.insider_type && (
+              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase"
+                    style={{ background: `${TYPE_COLOR[a.insider_type]}22`, color: TYPE_COLOR[a.insider_type] }}>
+                {a.insider_type}
+              </span>
+            )}
             <span className="ml-auto num" style={{ color: 'var(--muted)' }}>
               {new Date(a.created_at).toLocaleTimeString()}
             </span>

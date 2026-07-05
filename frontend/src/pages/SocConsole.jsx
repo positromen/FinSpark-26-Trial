@@ -6,14 +6,24 @@ import AlertsFeed from '../components/AlertsFeed.jsx'
 import Timeline from '../components/Timeline.jsx'
 import WhyPanel from '../components/WhyPanel.jsx'
 import LiveSessions from '../components/LiveSessions.jsx'
+import AccessReview from '../components/AccessReview.jsx'
+import SessionRecording from '../components/SessionRecording.jsx'
+
+const SCENARIOS = [
+  { kind: 'malicious', label: '☠ Malicious', color: 'var(--critical)', ink: '#fff' },
+  { kind: 'compromised', label: '🎭 Compromised', color: 'var(--accent)', ink: '#fff' },
+  { kind: 'negligent', label: '⚠ Negligent', color: 'var(--warning)', ink: '#1a1a19' },
+]
 
 export default function SocConsole({ user, onLogout }) {
   const [overview, setOverview] = useState(null)
   const [alerts, setAlerts] = useState([])
   const [live, setLive] = useState([])
+  const [access, setAccess] = useState([])
   const [selId, setSelId] = useState(null)
   const [events, setEvents] = useState([])
   const [reasons, setReasons] = useState([])
+  const [recording, setRecording] = useState(null)
   const [score, setScore] = useState(0)
   const [flashId, setFlashId] = useState(null)
   const [chain, setChain] = useState(null)
@@ -21,25 +31,24 @@ export default function SocConsole({ user, onLogout }) {
   const [busy, setBusy] = useState(false)
   const selRef = useRef(null)
 
-  const loadSelected = useCallback(async (id) => {
-    if (!id) return
-    const s = (await getJSON('/soc/live')).find((x) => x.id === id)
-    if (s) { setEvents(s.events); setReasons(s.reasons); setScore(s.score) }
+  const loadRecording = useCallback(async (id) => {
+    try { setRecording(await getJSON(`/soc/sessions/${id}/commands`)) } catch { setRecording(null) }
   }, [])
 
   const refresh = useCallback(async () => {
-    const [ov, al, lv] = await Promise.all([
-      getJSON('/soc/overview'), getJSON('/soc/alerts?limit=25'), getJSON('/soc/live'),
+    const [ov, al, lv, ac] = await Promise.all([
+      getJSON('/soc/overview'), getJSON('/soc/alerts?limit=25'),
+      getJSON('/soc/live'), getJSON('/soc/access-review'),
     ])
-    setOverview(ov); setAlerts(al); setLive(lv)
+    setOverview(ov); setAlerts(al); setLive(lv); setAccess(ac)
     const focus = lv.find((s) => s.id === selRef.current) || lv[0] || ov.sessions[0]
     if (focus) {
       const id = focus.id; selRef.current = id; setSelId(id)
       setScore(focus.score); setReasons(focus.reasons || [])
-      if (focus.events) setEvents(focus.events)
-      else setEvents(await getJSON(`/soc/sessions/${id}/events`))
+      setEvents(focus.events || await getJSON(`/soc/sessions/${id}/events`))
+      loadRecording(id)
     }
-  }, [])
+  }, [loadRecording])
 
   useEffect(() => {
     refresh().catch(console.error)
@@ -47,9 +56,6 @@ export default function SocConsole({ user, onLogout }) {
     const ws = openFeed((frame) => {
       if (frame.type === 'activity' || frame.type === 'alert') {
         setFlashId(frame.session_id); setTimeout(() => setFlashId(null), 1000)
-        if (frame.type === 'activity' && frame.session_id === selRef.current) {
-          setScore(frame.score); setReasons(frame.reasons || [])
-        }
         refresh().catch(console.error)
       }
       if (frame.type === 'audit_tamper') {
@@ -60,9 +66,13 @@ export default function SocConsole({ user, onLogout }) {
   }, [refresh])
 
   const select = async (id) => {
-    selRef.current = id; setSelId(id); await loadSelected(id)
+    selRef.current = id; setSelId(id)
+    const s = live.find((x) => x.id === id) || overview.sessions.find((x) => x.id === id)
+    if (s) { setScore(s.score); setReasons(s.reasons || []) }
+    setEvents(await getJSON(`/soc/sessions/${id}/events`))
+    loadRecording(id)
   }
-  const triggerAttack = async () => { setBusy(true); try { await postJSON('/demo/attack') } finally { setBusy(false); refresh() } }
+  const runScenario = async (kind) => { setBusy(true); try { await postJSON(`/demo/scenario/${kind}`) } finally { setBusy(false); refresh() } }
   const tamper = async () => { setBusy(true); try { await postJSON('/demo/tamper') } finally { setBusy(false) } }
   const verify = async () => {
     const r = await getJSON('/audit/verify')
@@ -86,18 +96,21 @@ export default function SocConsole({ user, onLogout }) {
             🔐 {pqc.kem} + {pqc.signature}
           </span>
         )}
-        <div className="ml-auto flex gap-2">
-          <button onClick={triggerAttack} disabled={busy}
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
-                  style={{ background: 'var(--critical)', color: '#fff' }}>▶ Scripted Attack</button>
+        <div className="ml-auto flex flex-wrap gap-2">
+          <span className="text-[10px] self-center" style={{ color: 'var(--muted)' }}>simulate insider:</span>
+          {SCENARIOS.map((s) => (
+            <button key={s.kind} onClick={() => runScenario(s.kind)} disabled={busy}
+                    className="px-2.5 py-1.5 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
+                    style={{ background: s.color, color: s.ink }}>{s.label}</button>
+          ))}
           <button onClick={tamper} disabled={busy}
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
-                  style={{ background: 'var(--serious)', color: '#1a1a19' }}>✂ Tamper Audit Log</button>
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold border cursor-pointer disabled:opacity-50"
+                  style={{ borderColor: 'var(--border)', color: 'var(--ink-2)' }}>✂ Tamper</button>
           <button onClick={verify}
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold border cursor-pointer"
-                  style={{ borderColor: 'var(--border)', color: 'var(--ink-2)' }}>⛓ Verify Chain</button>
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold border cursor-pointer"
+                  style={{ borderColor: 'var(--border)', color: 'var(--ink-2)' }}>⛓ Verify</button>
           <button onClick={onLogout}
-                  className="px-3 py-1.5 rounded-lg text-xs border cursor-pointer"
+                  className="px-2.5 py-1.5 rounded-lg text-xs border cursor-pointer"
                   style={{ borderColor: 'var(--border)', color: 'var(--ink-2)' }}>Sign out</button>
         </div>
       </header>
@@ -118,35 +131,42 @@ export default function SocConsole({ user, onLogout }) {
           <h2 className="panel-title mb-3">Live privileged sessions</h2>
           <LiveSessions sessions={live} selectedId={selId} onSelect={select} flashId={flashId} />
         </section>
-
         <section className="panel p-4">
           <h2 className="panel-title mb-3">Selected session risk</h2>
           <RiskGauge score={score} />
         </section>
-
         <section className="panel p-4">
           <h2 className="panel-title mb-3">Why flagged</h2>
           <WhyPanel reasons={reasons} />
         </section>
 
-        <section className="panel p-4">
-          <h2 className="panel-title mb-3">Alerts</h2>
+        <section className="panel p-4 lg:col-span-2">
+          <h2 className="panel-title mb-3">Alerts (tagged by insider type)</h2>
           <AlertsFeed alerts={alerts} flashId={flashId} />
         </section>
-
         <section className="panel p-4">
           <h2 className="panel-title mb-3">Session timeline</h2>
           <Timeline events={events} sessionLabel={selId ? `Session #${selId}` : ''} />
         </section>
 
+        <section className="panel p-4 lg:col-span-2">
+          <h2 className="panel-title mb-3">🎬 Privileged-session recording (replay)</h2>
+          <SessionRecording recording={recording} />
+        </section>
         <section className="panel p-4">
           <h2 className="panel-title mb-3">Risk heatmap — users × day</h2>
           <Heatmap heatmap={overview.heatmap} />
         </section>
+
+        <section className="panel p-4 lg:col-span-3">
+          <h2 className="panel-title mb-3">🔑 PAM access review — dormant / vendor / expired grants</h2>
+          <AccessReview rows={access} />
+        </section>
       </div>
 
       <footer className="mt-4 text-[10px]" style={{ color: 'var(--muted)' }}>
-        Prahari · FinSpark'26 · live behavioural scoring + NIST post-quantum audit (ML-KEM-768 / ML-DSA-65)
+        Prahari · FinSpark'26 · live behavioural scoring across malicious / negligent / compromised
+        insiders · NIST post-quantum audit (ML-KEM-768 / ML-DSA-65)
       </footer>
     </div>
   )

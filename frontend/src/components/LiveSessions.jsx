@@ -1,5 +1,7 @@
 import { riskBand } from '../api.js'
 
+const TYPE_COLOR = { malicious: 'var(--critical)', compromised: 'var(--accent)', negligent: 'var(--warning)' }
+
 // Currently-open privileged sessions with their live risk. A blocked row is
 // held in red; the selected row drives the timeline / why panels.
 export default function LiveSessions({ sessions, selectedId, onSelect, flashId }) {
@@ -25,6 +27,10 @@ export default function LiveSessions({ sessions, selectedId, onSelect, flashId }
               <div className="flex items-center gap-2 text-xs">
                 <span className="font-semibold">{s.user}</span>
                 <span style={{ color: 'var(--muted)' }}>{s.role}</span>
+                {s.insider_type &&
+                  <span className="text-[9px] px-1.5 py-0.5 rounded-full font-semibold uppercase"
+                        style={{ background: `${TYPE_COLOR[s.insider_type]}22`, color: TYPE_COLOR[s.insider_type] }}>
+                    {s.insider_type}</span>}
                 {s.status === 'BLOCKED' &&
                   <span className="text-[9px] px-1.5 py-0.5 rounded-full font-semibold"
                         style={{ background: 'var(--critical)', color: '#fff' }}>BLOCKED</span>}

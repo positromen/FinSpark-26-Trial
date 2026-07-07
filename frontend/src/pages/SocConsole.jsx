@@ -43,8 +43,12 @@ export default function SocConsole({ user, onLogout }) {
   const [detail, setDetail] = useState({ events: [], commands: [], model: null, trajectory: [] })
   const [flashUser, setFlashUser] = useState(null)
   const [wsUp, setWsUp] = useState(false)
+  const [toast, setToast] = useState(null)
+  const [decisions, setDecisions] = useState({})   // sessionId -> {label, by, at}
+  const [busyAction, setBusyAction] = useState(null) // `${id}:${kind}` while a POST is in flight
   const selRef = useRef(null)
   const flashT = useRef(null)
+  const toastT = useRef(null)
 
   // Build a combined, typed session list from live + recent history.
   const sessions = useMemo(() => {
@@ -86,10 +90,27 @@ export default function SocConsole({ user, onLogout }) {
     } catch { setDetail({ events: [], commands: [], model: null, trajectory: [] }) }
   }, [])
 
-  const respond = useCallback(async (id, kind) => {
-    try { await postJSON(`/soc/sessions/${id}/${kind}`) } catch (e) { console.error(e) }
-    refresh().catch(() => {}); loadDetail(id); getJSON('/audit').then(setAudit).catch(() => {})
-  }, [refresh, loadDetail])
+  const flashToast = useCallback((t) => {
+    setToast(t); clearTimeout(toastT.current); toastT.current = setTimeout(() => setToast(null), 3600)
+  }, [])
+
+  const respond = useCallback(async (id, kind, who) => {
+    setBusyAction(`${id}:${kind}`)
+    const MSG = {
+      lock: { label: 'LOCKED', tone: 'crit', text: `${who} — account locked, session terminated` },
+      approve: { label: 'APPROVED', tone: 'good', text: `${who} — action approved and released` },
+      dismiss: { label: 'DISMISSED', tone: 'muted', text: `${who} — marked reviewed (benign)` },
+    }[kind]
+    try {
+      const r = await postJSON(`/soc/sessions/${id}/${kind}`)
+      const by = r.locked_by || r.approved_by || r.dismissed_by || user.username
+      setDecisions((d) => ({ ...d, [id]: { label: MSG.label, by, at: Date.now() } }))
+      flashToast({ tone: MSG.tone, title: MSG.label, text: MSG.text, audit: true })
+      await refresh(); loadDetail(id); getJSON('/audit').then(setAudit).catch(() => {})
+    } catch {
+      flashToast({ tone: 'crit', title: 'ACTION FAILED', text: 'could not reach the server' })
+    } finally { setBusyAction(null) }
+  }, [refresh, loadDetail, user, flashToast])
 
   useEffect(() => {
     const pull = () => { refresh().catch(() => {}); getJSON('/audit').then(setAudit).catch(() => {}) }
@@ -203,10 +224,10 @@ export default function SocConsole({ user, onLogout }) {
             </div>
           )}
 
-          {section === 'overview' && <Overview {...{ sessions, selected, select, flashUser, detail, alerts, metrics, respond }} />}
-          {section === 'sessions' && <Sessions {...{ sessions, selected, select, flashUser }} />}
+          {section === 'overview' && <Overview {...{ sessions, selected, select, flashUser, detail, alerts, metrics, respond, decisions, busyAction }} />}
+          {section === 'sessions' && <Sessions {...{ sessions, selected, select, flashUser, decisions }} />}
           {section === 'alerts' && <Alerts alerts={alerts} flashUser={flashUser} />}
-          {section === 'analysis' && <Analysis selected={selected} timeline={detail.events} respond={respond} />}
+          {section === 'analysis' && <Analysis selected={selected} timeline={detail.events} respond={respond} decisions={decisions} busyAction={busyAction} />}
           {section === 'model' && <ModelInsights selected={selected} model={detail.model} trajectory={detail.trajectory} />}
           {section === 'replay' && <Replay selected={selected} commands={detail.commands} />}
           {section === 'heatmap' && <Heatmap heat={ov.heatmap} />}
@@ -214,6 +235,26 @@ export default function SocConsole({ user, onLogout }) {
           {section === 'audit' && <Audit entries={audit} chain={chain} />}
         </div>
       </div>
+      {toast && <Toast toast={toast} />}
+    </div>
+  )
+}
+
+function Toast({ toast }) {
+  const tone = { crit: C.critical, good: C.good, muted: C.navy }[toast.tone] || C.navy
+  return (
+    <div style={{ position: 'fixed', right: 22, bottom: 22, zIndex: 200, minWidth: 300, maxWidth: 380,
+                  background: '#fff', border: `1px solid ${C.border}`, borderLeft: `4px solid ${tone}`,
+                  borderRadius: 10, boxShadow: '0 12px 30px rgba(20,48,79,.22)', padding: '13px 16px',
+                  animation: 'toastIn .22s ease' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: tone }}>{toast.title}</span>
+      </div>
+      <div style={{ fontSize: 12.5, color: C.ink3, marginTop: 3 }}>{toast.text}</div>
+      {toast.audit && <div className="mono" style={{ fontSize: 10.5, color: C.muted2, marginTop: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
+        <span style={{ width: 6, height: 6, borderRadius: 2, background: '#3fbf6f' }} />
+        sealed to ML-DSA-65 audit chain
+      </div>}
     </div>
   )
 }
@@ -230,7 +271,8 @@ function typePill(type, size = 9) {
   return <span className="pill" style={{ background: t.bg, color: t.fg, fontSize: size, letterSpacing: .4 }}>{t.label}</span>
 }
 
-function SessionsTable({ sessions, selected, select, flashUser, pad = '9px 8px' }) {
+const DECO = { LOCKED: C.critical, APPROVED: C.good, DISMISSED: C.muted2 }
+function SessionsTable({ sessions, selected, select, flashUser, decisions, pad = '9px 8px' }) {
   return (
     <div className="scroll-x"><div style={{ minWidth: 560 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1.05fr .8fr 52px 1.25fr 1fr .85fr', gap: 8, padding: '4px 8px', fontSize: 10, letterSpacing: .7, color: C.muted3, fontWeight: 600 }}>
@@ -247,7 +289,10 @@ function SessionsTable({ sessions, selected, select, flashUser, pad = '9px 8px' 
             <span className="mono" style={{ textAlign: 'right', fontWeight: 600, fontSize: 13, color: scoreColor(s.score) }}>{Math.round(s.score)}</span>
             <span className="mono" style={{ fontSize: 10.5, color: C.muted2 }}>{s.src}</span>
             <span>{typePill(s.type)}</span>
-            <span style={{ fontSize: 10.5, fontWeight: 600, color: sm.color }}>{sm.icon} {sm.label}</span>
+            <span style={{ fontSize: 10.5, fontWeight: 600, color: sm.color, display: 'flex', alignItems: 'center', gap: 4 }}>
+              {sm.icon} {sm.label}
+              {decisions?.[s.id] && <span className="pill" style={{ fontSize: 8, background: `${DECO[decisions[s.id].label]}22`, color: DECO[decisions[s.id].label] }}>{decisions[s.id].label}</span>}
+            </span>
           </div>
         )
       })}
@@ -346,36 +391,51 @@ function MetricsStrip({ metrics }) {
   )
 }
 
-function ResponseBar({ selected, respond, compact }) {
+function ResponseBar({ selected, respond, decisions, busyAction }) {
   if (!selected) return null
   const id = selected.id
-  const btn = (label, kind, bg, fg, bd) => (
-    <button key={kind} className="btn" onClick={() => respond(id, kind)}
-            style={{ background: bg, color: fg, border: bd ? `1px solid ${bd}` : 'none',
-                     padding: compact ? '6px 10px' : '8px 12px', fontSize: 12, flex: compact ? 'none' : 1 }}>{label}</button>
-  )
+  const decided = decisions?.[id]
+  const btn = (label, kind, bg, fg, bd) => {
+    const busy = busyAction === `${id}:${kind}`
+    return (
+      <button key={kind} className="btn" disabled={busy} onClick={() => respond(id, kind, selected.user)}
+              style={{ background: bg, color: fg, border: bd ? `1px solid ${bd}` : 'none',
+                       padding: '9px 12px', fontSize: 12, flex: 1, opacity: busy ? 0.55 : 1,
+                       cursor: busy ? 'wait' : 'pointer' }}>{busy ? '…' : label}</button>
+    )
+  }
+  const decoColor = decided?.label === 'LOCKED' ? C.critical : decided?.label === 'APPROVED' ? C.good : C.muted
   return (
-    <div style={{ display: 'flex', gap: 8, width: '100%' }}>
-      {btn('⛔ Lock account', 'lock', C.critical, '#fff')}
-      {btn('✓ Approve', 'approve', '#0e7a0e', '#fff')}
-      {btn('⊘ Dismiss', 'dismiss', '#f2f5f9', C.muted, '#ccd3dd')}
+    <div style={{ width: '100%' }}>
+      <div style={{ display: 'flex', gap: 8 }}>
+        {btn('⛔ Lock account', 'lock', C.critical, '#fff')}
+        {btn('✓ Approve', 'approve', '#0e7a0e', '#fff')}
+        {btn('⊘ Dismiss', 'dismiss', '#f2f5f9', C.muted, '#ccd3dd')}
+      </div>
+      {decided && (
+        <div style={{ marginTop: 9, display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5,
+                      fontWeight: 600, color: decoColor }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: decoColor }} />
+          {decided.label} by {decided.by} · sealed to audit chain
+        </div>
+      )}
     </div>
   )
 }
 
-function Overview({ sessions, selected, select, flashUser, detail, alerts, metrics, respond }) {
+function Overview({ sessions, selected, select, flashUser, detail, alerts, metrics, respond, decisions, busyAction }) {
   return (
     <>
     <MetricsStrip metrics={metrics} />
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12,minmax(0,1fr))', gap: 14 }}>
       <div className="card card-pad" style={{ gridColumn: 'span 7', minWidth: 0 }}>
         <div className="label" style={{ marginBottom: 10 }}>LIVE PRIVILEGED SESSIONS</div>
-        <SessionsTable {...{ sessions, selected, select, flashUser }} />
+        <SessionsTable {...{ sessions, selected, select, flashUser, decisions }} />
       </div>
       <div className="card card-pad" style={{ gridColumn: 'span 5', display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}><SelectedCard selected={selected} /></div>
         <div className="label">ANALYST RESPONSE</div>
-        <ResponseBar selected={selected} respond={respond} />
+        <ResponseBar selected={selected} respond={respond} decisions={decisions} busyAction={busyAction} />
       </div>
       <div className="card card-pad" style={{ gridColumn: 'span 4', minWidth: 0 }}><Why selected={selected} /></div>
       <div className="card card-pad" style={{ gridColumn: 'span 4', minWidth: 0 }}>
@@ -430,7 +490,7 @@ function Alerts({ alerts, flashUser }) {
   )
 }
 
-function Analysis({ selected, timeline, respond }) {
+function Analysis({ selected, timeline, respond, decisions, busyAction }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 14, alignItems: 'start' }}>
       <div className="card card-pad">
@@ -447,7 +507,7 @@ function Analysis({ selected, timeline, respond }) {
         </div>
         <Why selected={selected} />
         <div className="label" style={{ margin: '16px 0 8px' }}>ANALYST RESPONSE</div>
-        <ResponseBar selected={selected} respond={respond} />
+        <ResponseBar selected={selected} respond={respond} decisions={decisions} busyAction={busyAction} />
       </div>
       <div className="card card-pad">
         <div className="label" style={{ marginBottom: 10 }}>SESSION TIMELINE</div>

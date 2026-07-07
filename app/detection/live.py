@@ -12,11 +12,27 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session as OrmSession
 
+from app.config import settings
 from app.detection.response import decide
 from app.detection.score import assess
 from app.detection.ueba import UebaModel
 from app.models.entities import Alert, Event, Session, User
 from app.pam import record_command
+
+
+def _stamp() -> datetime:
+    """Timestamp for a live event.
+
+    With the demo business-clock on (default), a live session run *outside*
+    normal banking hours is anchored to a business hour, so a legitimate
+    employee demoing in the evening isn't spuriously flagged as after-hours /
+    atypical. The scripted attack scenarios set their own explicit odd hours
+    (2 AM, 22:00) and are unaffected. Turn off for a real deployment.
+    """
+    now = datetime.now()
+    if settings.demo_business_clock and not (9 <= now.hour <= 17):
+        now = now.replace(hour=11)
+    return now
 
 # Catalogue of actions an employee can perform in the portal.
 # records_touched is a sensible default the UI can override (e.g. export size).
@@ -55,11 +71,11 @@ def open_session(db: OrmSession, user: User, source_ip: str, geo: str,
             .order_by(Session.id.desc()).first())
     if sess is not None:
         return sess
-    sess = Session(user_id=user.id, started_at=datetime.now(), status="ACTIVE",
+    now = _stamp()
+    sess = Session(user_id=user.id, started_at=now, status="ACTIVE",
                    source_ip=source_ip, geo=geo, device=device)
     db.add(sess)
     db.flush()
-    now = datetime.now()
     db.add(Event(user_id=user.id, session_id=sess.id, action_type="LOGIN",
                  resource="pam-gateway", records_touched=0, source_ip=source_ip,
                  geo=geo, device=device, timestamp=now))
@@ -73,7 +89,7 @@ def _candidate_event(sess: Session, user: User, action: str, resource: str,
     """An unsaved Event used only to score 'what if this action happened'."""
     return Event(user_id=user.id, session_id=sess.id, action_type=action,
                  resource=resource, records_touched=records, source_ip=sess.source_ip,
-                 geo=sess.geo, device=sess.device, timestamp=datetime.now())
+                 geo=sess.geo, device=sess.device, timestamp=_stamp())
 
 
 def perform_action(db: OrmSession, model: UebaModel, sess: Session, user: User,
@@ -105,7 +121,7 @@ def perform_action(db: OrmSession, model: UebaModel, sess: Session, user: User,
 
     if decision == "ALLOW" or (decision == "STEP_UP_MFA" and mfa_ok):
         allowed = True
-        candidate.timestamp = datetime.now()
+        candidate.timestamp = _stamp()
         db.add(candidate)
         db.flush()
         event_id = candidate.id
@@ -127,7 +143,7 @@ def perform_action(db: OrmSession, model: UebaModel, sess: Session, user: User,
 
     # Record this action in the privileged-session transcript (PAM session recording).
     outcome = "EXECUTED" if allowed else ("DENIED" if decision == "BLOCK" else "HELD")
-    record_command(db, sess.id, action, resource, records, datetime.now(),
+    record_command(db, sess.id, action, resource, records, _stamp(),
                    user.username, outcome=outcome)
 
     if decision != "ALLOW" and not (decision == "STEP_UP_MFA" and mfa_ok):
@@ -144,7 +160,7 @@ def perform_action(db: OrmSession, model: UebaModel, sess: Session, user: User,
 
 def close_session(db: OrmSession, sess: Session) -> None:
     if sess.status == "ACTIVE":
-        now = datetime.now()
+        now = _stamp()
         db.add(Event(user_id=sess.user_id, session_id=sess.id, action_type="LOGOUT",
                      resource="pam-gateway", records_touched=0, source_ip=sess.source_ip,
                      geo=sess.geo, device=sess.device, timestamp=now))

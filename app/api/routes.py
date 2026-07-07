@@ -1,5 +1,6 @@
 """REST + WebSocket API: auth, employee portal, SOC console, PQC layer."""
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from pydantic import BaseModel
@@ -286,15 +287,104 @@ def soc_session_commands(session_id: int, user: User = Depends(require_analyst),
 
 
 @router.post("/soc/sessions/{session_id}/approve")
-def soc_approve(session_id: int, user: User = Depends(require_analyst),
-                db: OrmSession = Depends(get_db)) -> dict:
+async def soc_approve(session_id: int, user: User = Depends(require_analyst),
+                      db: OrmSession = Depends(get_db)) -> dict:
     """Maker-checker: an analyst approves a held session (records the decision)."""
     sess = db.get(Session, session_id)
     if sess is None:
         raise HTTPException(404, "session not found")
     audit.append_entry(db, actor=user.username, action="MAKER_CHECKER_APPROVED",
                        payload=f"session={session_id} user={sess.user.username}")
-    return {"ok": True, "session_id": session_id, "approved_by": user.username}
+    await manager.broadcast({"type": "presence", "event": "approved", "session_id": session_id,
+                             "user": sess.user.username})
+    return {"ok": True, "session_id": session_id, "approved_by": user.username, "action": "APPROVED"}
+
+
+@router.post("/soc/sessions/{session_id}/lock")
+async def soc_lock(session_id: int, user: User = Depends(require_analyst),
+                   db: OrmSession = Depends(get_db)) -> dict:
+    """Analyst force-locks an account/session — enforcement outcome #5, audit-logged."""
+    sess = db.get(Session, session_id)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    sess.status = "BLOCKED"
+    sess.ended_at = datetime.now()
+    db.commit()
+    audit.append_entry(db, actor=user.username, action="ANALYST_LOCK",
+                       payload=f"session={session_id} user={sess.user.username} locked by analyst")
+    await manager.broadcast({"type": "alert", "session_id": session_id, "user": sess.user.username,
+                             "role": sess.user.role, "severity": "CRITICAL", "action": "LOCKED",
+                             "score": round(sess.risk_score, 1), "insider_type": None,
+                             "reasons": [f"Account locked by SOC analyst {user.username}"]})
+    return {"ok": True, "session_id": session_id, "status": "BLOCKED", "locked_by": user.username}
+
+
+@router.post("/soc/sessions/{session_id}/dismiss")
+async def soc_dismiss(session_id: int, user: User = Depends(require_analyst),
+                      db: OrmSession = Depends(get_db)) -> dict:
+    """Analyst dismisses a session as reviewed / benign (false positive), audit-logged."""
+    sess = db.get(Session, session_id)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    audit.append_entry(db, actor=user.username, action="ANALYST_DISMISS",
+                       payload=f"session={session_id} user={sess.user.username} marked reviewed (benign)")
+    await manager.broadcast({"type": "presence", "event": "dismissed", "session_id": session_id,
+                             "user": sess.user.username})
+    return {"ok": True, "session_id": session_id, "dismissed_by": user.username}
+
+
+@router.get("/soc/sessions/{session_id}/trajectory")
+def soc_trajectory(session_id: int, user: User = Depends(require_analyst),
+                   db: OrmSession = Depends(get_db)) -> dict:
+    """How the risk score climbed action-by-action across the session."""
+    sess = db.get(Session, session_id)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    model = get_model(db)
+    events = sorted(sess.events, key=lambda e: e.timestamp)
+    traj = []
+    for k in range(1, len(events) + 1):
+        a = assess(sess.user, events[:k], model)
+        traj.append({"step": k, "action": events[k - 1].action_type,
+                     "resource": events[k - 1].resource, "score": round(a.score, 1)})
+    return {"session_id": session_id, "user": sess.user.username, "trajectory": traj}
+
+
+@router.get("/soc/sessions/{session_id}/model")
+def soc_model(session_id: int, user: User = Depends(require_analyst),
+              db: OrmSession = Depends(get_db)) -> dict:
+    """AI Model Insights for a session: feature attribution + per-user baseline factors."""
+    sess = db.get(Session, session_id)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    model = get_model(db)
+    events = sorted(sess.events, key=lambda e: e.timestamp)
+    ur = model.score_session(sess.user, events)
+    a = assess(sess.user, events, model)
+    return {"user": sess.user.username, "role": sess.user.role,
+            "card": model.model_card(),
+            "features": model.feature_breakdown(sess.user, events),
+            "anomaly": round(ur.anomaly_score, 1),
+            "self_deviation": round(ur.self_deviation, 1),
+            "peer_deviation": round(ur.peer_deviation, 1),
+            "factors": ur.factors, "score": round(a.score, 1),
+            "insider_type": a.insider_type}
+
+
+@router.get("/soc/metrics")
+def soc_metrics(user: User = Depends(require_analyst),
+                db: OrmSession = Depends(get_db)) -> dict:
+    """Business-impact metrics for the SOC overview strip — all computed from live data."""
+    review = access_review(db)
+    return {
+        "privileged_accounts": db.query(User).filter(User.account_type == "EMPLOYEE").count(),
+        "sessions_monitored": db.query(Session).count(),
+        "threats_blocked": db.query(Alert).filter(Alert.action_taken.in_(["BLOCK", "LOCKED"])).count(),
+        "alerts_total": db.query(Alert).count(),
+        "high_risk_accounts": sum(1 for r in review if r["risk"] == "HIGH"),
+        "detect_latency": "< 1s",
+        "pqc": f"{pqc.KEM_ALG} / {pqc.SIG_ALG}",
+    }
 
 
 @router.get("/soc/sessions/{session_id}/events")

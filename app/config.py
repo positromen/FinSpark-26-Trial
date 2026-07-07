@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     token_ttl_minutes: int = 480
     demo_password: str = "prahari123"  # shared password for all seeded accounts (demo)
     mfa_code: str = "246810"           # accepted step-up MFA code (demo)
+    # Anchor live portal events to business hours when run outside 09:00-17:00,
+    # so a legitimate evening demo isn't spuriously flagged after-hours. Off in prod.
+    demo_business_clock: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="PRAHARI_")
 

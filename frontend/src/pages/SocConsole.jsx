@@ -5,7 +5,8 @@ import Sidebar from '../components/Sidebar.jsx'
 import Gauge from '../components/Gauge.jsx'
 
 const TITLES = { overview: 'PRAHARI · SOC Console', sessions: 'Live Privileged Sessions', alerts: 'Alerts Feed',
-  analysis: 'Threat Analysis', replay: 'Session Replay', heatmap: 'Risk Heatmap', pam: 'PAM Access Review', audit: 'Audit Chain Integrity' }
+  analysis: 'Threat Analysis', model: 'AI Model Insights', replay: 'Session Replay', heatmap: 'Risk Heatmap',
+  pam: 'PAM Access Review', audit: 'Audit Chain Integrity' }
 const SCEN = [
   { kind: 'malicious', label: '☠ Malicious', bg: 'rgba(208,59,59,.9)', fg: '#fff' },
   { kind: 'compromised', label: '🎭 Compromised', bg: 'rgba(57,135,229,.9)', fg: '#fff' },
@@ -34,11 +35,12 @@ export default function SocConsole({ user, onLogout }) {
   const [live, setLive] = useState([])
   const [alerts, setAlerts] = useState([])
   const [pam, setPam] = useState([])
+  const [metrics, setMetrics] = useState(null)
   const [audit, setAudit] = useState([])
   const [chain, setChain] = useState({ ok: true })
   const [bannerOpen, setBannerOpen] = useState(true)
   const [selId, setSelId] = useState(null)
-  const [detail, setDetail] = useState({ events: [], commands: [] })
+  const [detail, setDetail] = useState({ events: [], commands: [], model: null, trajectory: [] })
   const [flashUser, setFlashUser] = useState(null)
   const [wsUp, setWsUp] = useState(false)
   const selRef = useRef(null)
@@ -64,22 +66,30 @@ export default function SocConsole({ user, onLogout }) {
   const selected = sessions.find((s) => s.id === selId) || sessions[0] || null
 
   const refresh = useCallback(async () => {
-    const [o, l, a, p] = await Promise.all([
-      getJSON('/soc/overview'), getJSON('/soc/live'), getJSON('/soc/alerts?limit=25'), getJSON('/soc/access-review'),
+    const [o, l, a, p, m] = await Promise.all([
+      getJSON('/soc/overview'), getJSON('/soc/live'), getJSON('/soc/alerts?limit=25'),
+      getJSON('/soc/access-review'), getJSON('/soc/metrics'),
     ])
-    setOv(o); setLive(l); setAlerts(a); setPam(p)
+    setOv(o); setLive(l); setAlerts(a); setPam(p); setMetrics(m)
   }, [])
 
   const loadDetail = useCallback(async (id) => {
-    if (!id) { setDetail({ events: [], commands: [] }); return }
+    if (!id) { setDetail({ events: [], commands: [], model: null, trajectory: [] }); return }
     try {
-      const [events, cmd] = await Promise.all([
+      const [events, cmd, model, traj] = await Promise.all([
         getJSON(`/soc/sessions/${id}/events`),
         getJSON(`/soc/sessions/${id}/commands`),
+        getJSON(`/soc/sessions/${id}/model`).catch(() => null),
+        getJSON(`/soc/sessions/${id}/trajectory`).catch(() => ({ trajectory: [] })),
       ])
-      setDetail({ events, commands: cmd.commands || [] })
-    } catch { setDetail({ events: [], commands: [] }) }
+      setDetail({ events, commands: cmd.commands || [], model, trajectory: traj.trajectory || [] })
+    } catch { setDetail({ events: [], commands: [], model: null, trajectory: [] }) }
   }, [])
+
+  const respond = useCallback(async (id, kind) => {
+    try { await postJSON(`/soc/sessions/${id}/${kind}`) } catch (e) { console.error(e) }
+    refresh().catch(() => {}); loadDetail(id); getJSON('/audit').then(setAudit).catch(() => {})
+  }, [refresh, loadDetail])
 
   useEffect(() => {
     const pull = () => { refresh().catch(() => {}); getJSON('/audit').then(setAudit).catch(() => {}) }
@@ -126,6 +136,7 @@ export default function SocConsole({ user, onLogout }) {
     ] },
     { title: 'INVESTIGATION', items: [
       { label: 'Threat Analysis', icon: '◎', active: section === 'analysis', onClick: () => setSection('analysis') },
+      { label: 'AI Model Insights', icon: '⊛', active: section === 'model', onClick: () => setSection('model') },
       { label: 'Session Replay', icon: '▶', active: section === 'replay', onClick: () => setSection('replay') },
       { label: 'Risk Heatmap', icon: '▦', active: section === 'heatmap', onClick: () => setSection('heatmap') },
     ] },
@@ -192,10 +203,11 @@ export default function SocConsole({ user, onLogout }) {
             </div>
           )}
 
-          {section === 'overview' && <Overview {...{ sessions, selected, select, flashUser, detail, alerts }} />}
+          {section === 'overview' && <Overview {...{ sessions, selected, select, flashUser, detail, alerts, metrics, respond }} />}
           {section === 'sessions' && <Sessions {...{ sessions, selected, select, flashUser }} />}
           {section === 'alerts' && <Alerts alerts={alerts} flashUser={flashUser} />}
-          {section === 'analysis' && <Analysis selected={selected} timeline={detail.events} />}
+          {section === 'analysis' && <Analysis selected={selected} timeline={detail.events} respond={respond} />}
+          {section === 'model' && <ModelInsights selected={selected} model={detail.model} trajectory={detail.trajectory} />}
           {section === 'replay' && <Replay selected={selected} commands={detail.commands} />}
           {section === 'heatmap' && <Heatmap heat={ov.heatmap} />}
           {section === 'pam' && <Pam rows={pam} />}
@@ -312,15 +324,58 @@ function AlertRow({ a, flashUser, big }) {
   )
 }
 
-function Overview({ sessions, selected, select, flashUser, detail, alerts }) {
+function MetricsStrip({ metrics }) {
+  if (!metrics) return null
+  const items = [
+    ['PRIVILEGED ACCOUNTS', metrics.privileged_accounts, C.navy],
+    ['SESSIONS MONITORED', metrics.sessions_monitored, C.navy],
+    ['THREATS BLOCKED', metrics.threats_blocked, C.critical],
+    ['HIGH-RISK ACCOUNTS', metrics.high_risk_accounts, C.seriousInk],
+    ['DETECT LATENCY', metrics.detect_latency, C.good],
+    ['POST-QUANTUM', '✓ sealed', C.good],
+  ]
   return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,minmax(0,1fr))', gap: 10, marginBottom: 14 }}>
+      {items.map(([l, v, c]) => (
+        <div key={l} className="card" style={{ padding: '11px 13px' }}>
+          <div className="label" style={{ letterSpacing: .8, fontSize: 9.5 }}>{l}</div>
+          <div className="num" style={{ fontSize: 19, fontWeight: 700, color: c, marginTop: 3 }}>{v}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ResponseBar({ selected, respond, compact }) {
+  if (!selected) return null
+  const id = selected.id
+  const btn = (label, kind, bg, fg, bd) => (
+    <button key={kind} className="btn" onClick={() => respond(id, kind)}
+            style={{ background: bg, color: fg, border: bd ? `1px solid ${bd}` : 'none',
+                     padding: compact ? '6px 10px' : '8px 12px', fontSize: 12, flex: compact ? 'none' : 1 }}>{label}</button>
+  )
+  return (
+    <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+      {btn('⛔ Lock account', 'lock', C.critical, '#fff')}
+      {btn('✓ Approve', 'approve', '#0e7a0e', '#fff')}
+      {btn('⊘ Dismiss', 'dismiss', '#f2f5f9', C.muted, '#ccd3dd')}
+    </div>
+  )
+}
+
+function Overview({ sessions, selected, select, flashUser, detail, alerts, metrics, respond }) {
+  return (
+    <>
+    <MetricsStrip metrics={metrics} />
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12,minmax(0,1fr))', gap: 14 }}>
       <div className="card card-pad" style={{ gridColumn: 'span 7', minWidth: 0 }}>
         <div className="label" style={{ marginBottom: 10 }}>LIVE PRIVILEGED SESSIONS</div>
         <SessionsTable {...{ sessions, selected, select, flashUser }} />
       </div>
-      <div className="card card-pad" style={{ gridColumn: 'span 5', display: 'flex', gap: 16, alignItems: 'center', minWidth: 0 }}>
-        <SelectedCard selected={selected} />
+      <div className="card card-pad" style={{ gridColumn: 'span 5', display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}><SelectedCard selected={selected} /></div>
+        <div className="label">ANALYST RESPONSE</div>
+        <ResponseBar selected={selected} respond={respond} />
       </div>
       <div className="card card-pad" style={{ gridColumn: 'span 4', minWidth: 0 }}><Why selected={selected} /></div>
       <div className="card card-pad" style={{ gridColumn: 'span 4', minWidth: 0 }}>
@@ -336,6 +391,7 @@ function Overview({ sessions, selected, select, flashUser, detail, alerts }) {
       </div>
       <ReplayTerminal selected={selected} commands={detail.commands} span={12} inline />
     </div>
+    </>
   )
 }
 
@@ -374,7 +430,7 @@ function Alerts({ alerts, flashUser }) {
   )
 }
 
-function Analysis({ selected, timeline }) {
+function Analysis({ selected, timeline, respond }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 14, alignItems: 'start' }}>
       <div className="card card-pad">
@@ -390,6 +446,8 @@ function Analysis({ selected, timeline }) {
           </div>
         </div>
         <Why selected={selected} />
+        <div className="label" style={{ margin: '16px 0 8px' }}>ANALYST RESPONSE</div>
+        <ResponseBar selected={selected} respond={respond} />
       </div>
       <div className="card card-pad">
         <div className="label" style={{ marginBottom: 10 }}>SESSION TIMELINE</div>
@@ -397,6 +455,92 @@ function Analysis({ selected, timeline }) {
       </div>
     </div>
   )
+}
+
+function Sparkline({ points, height = 44 }) {
+  if (!points || points.length < 2) return <div style={{ fontSize: 11, color: C.muted3 }}>not enough steps to plot</div>
+  const w = 100, max = 100
+  const step = w / (points.length - 1)
+  const y = (v) => height - 4 - (v / max) * (height - 8)
+  const d = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${(i * step).toFixed(1)} ${y(p.score).toFixed(1)}`).join(' ')
+  const last = points[points.length - 1]
+  return (
+    <svg viewBox={`0 0 ${w} ${height}`} width="100%" height={height} preserveAspectRatio="none" style={{ overflow: 'visible' }}>
+      {[40, 70, 85].map((t) => <line key={t} x1="0" x2={w} y1={y(t)} y2={y(t)} stroke="#e6eaf0" strokeWidth="0.5" />)}
+      <path d={d} fill="none" stroke={scoreColor(last.score)} strokeWidth="2" vectorEffect="non-scaling-stroke" />
+      {points.map((p, i) => <circle key={i} cx={i * step} cy={y(p.score)} r="1.6" fill={scoreColor(p.score)} vectorEffect="non-scaling-stroke" />)}
+    </svg>
+  )
+}
+
+function ModelInsights({ selected, model, trajectory }) {
+  if (!selected) return <div className="card card-pad" style={{ color: C.muted2, fontSize: 13 }}>Select a session to inspect the model.</div>
+  const card = model?.card
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.15fr) minmax(0,1fr)', gap: 14, alignItems: 'start' }}>
+      <div className="card card-pad">
+        <div className="label" style={{ marginBottom: 12 }}>UEBA MODEL · FEATURE ATTRIBUTION · {selected.user}</div>
+        <div style={{ display: 'flex', gap: 14, marginBottom: 14, flexWrap: 'wrap' }}>
+          {[['ANOMALY', `${model?.anomaly ?? '—'}/100`, scoreColor(model?.anomaly ?? 0)],
+            ['vs OWN AVG', model?.self_deviation ? `${model.self_deviation}×` : '—', C.navy],
+            ['vs PEERS', model?.peer_deviation ? `${model.peer_deviation}×` : '—', C.navy]].map(([l, v, c]) => (
+            <div key={l}><div className="label" style={{ fontSize: 9.5 }}>{l}</div>
+              <div className="num" style={{ fontSize: 20, fontWeight: 700, color: c }}>{v}</div></div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+          {(model?.features || []).map((f) => (
+            <div key={f.name} style={{ display: 'grid', gridTemplateColumns: '1.1fr 60px 1fr', gap: 10, alignItems: 'center',
+                          padding: '7px 10px', borderRadius: 7, border: `1px solid ${f.anomalous ? 'rgba(192,38,38,.3)' : C.ring}`,
+                          background: f.anomalous ? 'rgba(192,38,38,.04)' : '#fff' }}>
+              <span style={{ fontSize: 12, color: f.anomalous ? C.critical : C.ink2, fontWeight: f.anomalous ? 600 : 400 }}>
+                {f.anomalous ? '▲ ' : ''}{f.name}
+              </span>
+              <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: f.anomalous ? C.critical : C.ink, textAlign: 'right' }}>{f.value}</span>
+              <span className="mono" style={{ fontSize: 11, color: C.muted2 }}>typical {f.typical}</span>
+            </div>
+          ))}
+        </div>
+        {(model?.factors || []).length > 0 && (
+          <>
+            <div className="label" style={{ margin: '14px 0 8px' }}>PER-USER BEHAVIOURAL FACTORS</div>
+            <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {model.factors.map((r, i) => <li key={i} style={{ fontSize: 12.5, color: C.seriousInk }}>{r}</li>)}
+            </ul>
+          </>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div className="card card-pad">
+          <div className="label" style={{ marginBottom: 10 }}>RISK SCORE TRAJECTORY · CLIMB PER ACTION</div>
+          <Sparkline points={trajectory} height={64} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 10 }}>
+            {(trajectory || []).map((p) => (
+              <div key={p.step} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 11.5 }}>
+                <span className="mono" style={{ color: C.muted3, width: 14 }}>{p.step}</span>
+                <span className="mono" style={{ color: C.ink3, flex: 1 }}>{p.action}</span>
+                <span className="mono" style={{ fontWeight: 700, color: scoreColor(p.score) }}>{p.score}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="card card-pad">
+          <div className="label" style={{ marginBottom: 10 }}>MODEL CARD</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: C.ink3 }}>
+            <Row k="Algorithm" v={card?.algorithm} />
+            <Row k="Trees" v={card?.estimators} />
+            <Row k="Trained on" v={card ? `${card.training_sessions} sessions · ${card.training_vectors} vectors` : '—'} />
+            <Row k="Profiled" v={card ? `${card.users_profiled} users · ${card.roles_profiled} roles` : '—'} />
+            <Row k="Features" v={card ? card.features.length : '—'} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+function Row({ k, v }) {
+  return <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+    <span style={{ color: C.muted2 }}>{k}</span><span style={{ color: C.ink, textAlign: 'right' }}>{v}</span></div>
 }
 
 const GLYPH = { EXECUTED: { g: '$', c: '#3fbf6f' }, HELD: { g: '‖', c: '#e3a008' }, DENIED: { g: '✗', c: '#ff6b6b' } }

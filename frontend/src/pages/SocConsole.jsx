@@ -40,6 +40,7 @@ export default function SocConsole({ user, onLogout }) {
   const [selId, setSelId] = useState(null)
   const [detail, setDetail] = useState({ events: [], commands: [] })
   const [flashUser, setFlashUser] = useState(null)
+  const [wsUp, setWsUp] = useState(false)
   const selRef = useRef(null)
   const flashT = useRef(null)
 
@@ -81,17 +82,18 @@ export default function SocConsole({ user, onLogout }) {
   }, [])
 
   useEffect(() => {
-    refresh().catch(console.error)
-    getJSON('/audit').then(setAudit).catch(() => {})
+    const pull = () => { refresh().catch(() => {}); getJSON('/audit').then(setAudit).catch(() => {}) }
+    pull()
+    const flash = (u) => { if (!u) return; setFlashUser(u); clearTimeout(flashT.current); flashT.current = setTimeout(() => setFlashUser(null), 3500) }
     const ws = openFeed((f) => {
-      if (f.type === 'activity' || f.type === 'alert') {
-        if (f.user) { setFlashUser(f.user); clearTimeout(flashT.current); flashT.current = setTimeout(() => setFlashUser(null), 3500) }
-        refresh().catch(console.error)
-        getJSON('/audit').then(setAudit).catch(() => {})
-      }
+      if (f.type === 'activity' || f.type === 'alert' || f.type === 'presence') { flash(f.user); pull() }
+      // follow the live threat: jump the console's focus to the flagged session
+      if (f.type === 'alert' && f.session_id) { selRef.current = f.session_id; setSelId(f.session_id) }
       if (f.type === 'audit_tamper') setChain({ ok: f.chain_ok, problem: f.problem, badId: f.first_bad_id })
-    })
-    return () => { ws.close(); clearTimeout(flashT.current) }
+    }, setWsUp)
+    // polling fallback so the console stays fresh even if a frame is missed over the LAN
+    const poll = setInterval(() => refresh().catch(() => {}), 4000)
+    return () => { ws.close(); clearInterval(poll); clearTimeout(flashT.current) }
   }, [refresh])
 
   // keep a session selected; auto-focus the highest-risk one until the user picks
@@ -151,6 +153,12 @@ export default function SocConsole({ user, onLogout }) {
                         border: '1px solid rgba(255,255,255,.2)', borderRadius: 7, padding: '6px 11px', fontSize: 11.5, color: '#cdddf2' }}>
             <span style={{ width: 7, height: 7, borderRadius: 2, background: '#3fbf6f', transform: 'rotate(45deg)' }} />
             post-quantum sealed
+          </div>
+          <div className="mono" style={{ display: 'flex', alignItems: 'center', gap: 7, background: 'rgba(255,255,255,.08)',
+                        border: '1px solid rgba(255,255,255,.2)', borderRadius: 7, padding: '6px 11px', fontSize: 11.5,
+                        color: wsUp ? '#8ef0b0' : '#f5b3b3' }}>
+            <span className={wsUp ? 'pulse' : ''} style={{ width: 7, height: 7, borderRadius: '50%', background: wsUp ? '#3fbf6f' : '#e06666' }} />
+            {wsUp ? 'LIVE' : 'reconnecting…'}
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 7, flexWrap: 'wrap' }}>
             {SCEN.map((s) => <button key={s.kind} className="btn" style={{ background: s.bg, color: s.fg, padding: '8px 12px', fontSize: 12 }} onClick={() => runScenario(s.kind)}>{s.label}</button>)}

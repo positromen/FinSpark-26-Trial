@@ -114,12 +114,23 @@ def _session_state(sess: Session) -> dict:
                        for e in sorted(sess.events, key=lambda e: e.timestamp)]}
 
 
+async def _broadcast_presence(user: User, sess: Session, event: str) -> None:
+    """Tell every connected SOC console that the live-session set changed."""
+    await manager.broadcast({
+        "type": "presence", "event": event, "session_id": sess.id,
+        "user": user.username, "role": user.role, "status": sess.status,
+        "score": round(sess.risk_score, 1),
+    })
+
+
 @router.post("/portal/bootstrap")
-def portal_bootstrap(user: User = Depends(_employee), db: OrmSession = Depends(get_db)) -> dict:
+async def portal_bootstrap(user: User = Depends(_employee),
+                           db: OrmSession = Depends(get_db)) -> dict:
     """Open the employee's live session and return everything the portal needs."""
     get_model(db)  # ensure baseline trained before any live scoring
     ip, geo, device = _login_identity(user)
     sess = live.open_session(db, user, ip, geo, device)
+    await _broadcast_presence(user, sess, "login")  # SOC sees the session appear instantly
     return {
         "user": {"username": user.username, "name": user.name, "role": user.role,
                  "is_vendor": user.is_vendor, "is_dormant": user.is_dormant},
@@ -128,6 +139,15 @@ def portal_bootstrap(user: User = Depends(_employee), db: OrmSession = Depends(g
         "all_resources": ALL_RESOURCES,
         "catalog": live.ACTION_CATALOG,
     }
+
+
+@router.get("/portal/session")
+def portal_session(user: User = Depends(_employee), db: OrmSession = Depends(get_db)) -> dict:
+    """Current live-session state — polled by the portal so its gauge/log stay live."""
+    sess = (db.query(Session)
+            .filter(Session.user_id == user.id, Session.status.in_(["ACTIVE", "BLOCKED"]))
+            .order_by(Session.id.desc()).first())
+    return {"session": _session_state(sess)} if sess else {"session": None}
 
 
 @router.post("/portal/action")
@@ -156,12 +176,13 @@ async def portal_action(body: ActionIn, user: User = Depends(_employee),
 
 
 @router.post("/portal/logout")
-def portal_logout(user: User = Depends(_employee), db: OrmSession = Depends(get_db)) -> dict:
+async def portal_logout(user: User = Depends(_employee), db: OrmSession = Depends(get_db)) -> dict:
     sess = (db.query(Session)
             .filter(Session.user_id == user.id, Session.status == "ACTIVE")
             .order_by(Session.id.desc()).first())
     if sess:
         live.close_session(db, sess)
+        await _broadcast_presence(user, sess, "logout")
     return {"ok": True}
 
 

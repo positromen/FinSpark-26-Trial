@@ -73,9 +73,24 @@ export function riskBand(score) {
   return { label: 'NORMAL', color: 'var(--good)', name: 'good' }
 }
 
-export function openFeed(onMessage) {
+// Resilient live feed: auto-reconnects if the socket drops (flaky venue Wi-Fi,
+// server restart, sleeping laptop). Returns a handle with .close() to stop.
+export function openFeed(onMessage, onStatus) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  const ws = new WebSocket(`${proto}://${location.host}/ws/feed`)
-  ws.onmessage = (m) => { try { onMessage(JSON.parse(m.data)) } catch { /* ignore */ } }
-  return ws
+  const url = `${proto}://${location.host}/ws/feed`
+  let ws, timer, closed = false, tries = 0
+  const connect = () => {
+    ws = new WebSocket(url)
+    ws.onopen = () => { tries = 0; onStatus && onStatus(true) }
+    ws.onmessage = (m) => { try { onMessage(JSON.parse(m.data)) } catch { /* ignore */ } }
+    ws.onclose = () => {
+      onStatus && onStatus(false)
+      if (closed) return
+      const delay = Math.min(1000 * 2 ** tries, 8000); tries += 1
+      timer = setTimeout(connect, delay)
+    }
+    ws.onerror = () => { try { ws.close() } catch { /* ignore */ } }
+  }
+  connect()
+  return { close: () => { closed = true; clearTimeout(timer); try { ws && ws.close() } catch { /* ignore */ } } }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { postJSON } from '../api.js'
+import { getJSON, postJSON } from '../api.js'
 import { C, TYPE, scoreColor, riskLabel, fmt } from '../ui.js'
 import Sidebar from '../components/Sidebar.jsx'
 import Gauge from '../components/Gauge.jsx'
@@ -55,6 +55,14 @@ export default function Portal({ user, onLogout }) {
       setBoot(b); setSession(b.session)
       setTarget(b.my_resources[0] || b.all_resources[0]?.name || '')
     }).catch(console.error)
+  }, [])
+
+  // Keep the live gauge / activity / block state fresh without clicking.
+  useEffect(() => {
+    const t = setInterval(() => {
+      getJSON('/portal/session').then((d) => { if (d.session) setSession(d.session) }).catch(() => {})
+    }, 3000)
+    return () => clearInterval(t)
   }, [])
 
   const meta = useMemo(() => {
@@ -151,7 +159,7 @@ export default function Portal({ user, onLogout }) {
             </div>
           )}
 
-          {section === 'dashboard' && <Dashboard score={score} onConsole={() => setSection('console')} />}
+          {section === 'dashboard' && <Dashboard score={score} events={session?.events || []} onConsole={() => setSection('console')} />}
           {section === 'console' && (
             <Console {...{ target, setTarget, myRes, otherRes, records, setRecords, run, busy, blocked, result, score }} />
           )}
@@ -228,13 +236,14 @@ function Kpi({ label, value, sub, color }) {
   )
 }
 
-function Dashboard({ score, onConsole }) {
+function Dashboard({ score, events, onConsole }) {
+  const queries = 42 + events.filter((e) => e.action === 'DB_QUERY' || e.action === 'DB_EXPORT').length
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,minmax(0,1fr))', gap: 12 }}>
         <Kpi label="ACCOUNTS MANAGED" value="1,284" sub="across 4 branches" color={C.navy} />
         <Kpi label="PENDING APPROVALS" value="3" sub="awaiting checker" color={C.seriousInk} />
-        <Kpi label="QUERIES TODAY" value="47" sub="within baseline" color={C.navy} />
+        <Kpi label="QUERIES TODAY" value={String(queries)} sub="this session included" color={C.navy} />
         <Kpi label="SESSION RISK" value={String(Math.round(score))} sub={riskLabel(score)} color={scoreColor(score)} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.5fr) minmax(0,1fr)', gap: 16, alignItems: 'start' }}>

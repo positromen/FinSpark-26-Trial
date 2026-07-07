@@ -32,7 +32,31 @@ MFA step-up code (demo): **`246810`**
 .\run.ps1 -Reset        # clean DB + baseline history, server on :8000
 ```
 
-Open **http://127.0.0.1:8000** in two windows. Log the left one in as `soc_admin`.
+`run.ps1` prints two URLs — **This computer** (`http://localhost:8000`) and
+**Other computers** (`http://<LAN-IP>:8000`).
+
+### Two-computer demo (recommended)
+
+Run the server on **one** laptop (the SOC machine). Then:
+
+- **Computer 1 — SOC big screen:** open `http://localhost:8000`, sign in as
+  `soc_admin`. Leave it on the **Overview** — the header shows a green **LIVE** dot.
+- **Computer 2 — employee:** on the same Wi-Fi, open the **Other computers** URL
+  (`http://<LAN-IP>:8000`) and sign in as `rmehta` / `ext_dsouza` / `ext_rao`.
+
+Everything the employee does on Computer 2 appears on Computer 1 **instantly** — the
+session shows up on login, the score climbs per action, alerts flash, the block lands,
+and the SOC screen auto-follows the flagged session. No refreshing, no buttons needed.
+
+> First time only: if Computer 2 can't reach the server, allow **port 8000** through
+> Windows Firewall on Computer 1 (accept the prompt on first `run.ps1`, or:
+> `New-NetFirewallRule -DisplayName Prahari -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow`).
+
+### Single-laptop demo
+
+Open **http://localhost:8000** in two browser windows side by side; log one in as
+`soc_admin` and the other as an employee. The scenario buttons on the SOC header
+(☠ / 🎭 / ⚠) also drive the whole story from one screen if you prefer.
 
 ---
 

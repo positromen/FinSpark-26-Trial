@@ -29,5 +29,14 @@ if [ ! -d frontend/dist ]; then
   (cd frontend && npm install --no-fund --no-audit && npm run build)
 fi
 
-echo "[prahari] SOC dashboard -> http://127.0.0.1:8000"
-uvicorn app.main:app --host 127.0.0.1 --port 8000
+# Bind to 0.0.0.0 so a second computer on the same Wi-Fi/LAN can connect.
+LAN=$(python -c "import socket;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);\
+s.connect(('8.8.8.8',80));print(s.getsockname()[0]);s.close()" 2>/dev/null || echo "")
+echo ""
+echo "[prahari] ===================================================="
+echo "[prahari]  This computer  : http://localhost:8000"
+[ -n "$LAN" ] && echo "[prahari]  Other computers: http://$LAN:8000   (same Wi-Fi/LAN)"
+echo "[prahari]  (if the 2nd computer can't connect, allow port 8000 in the firewall)"
+echo "[prahari] ===================================================="
+echo ""
+uvicorn app.main:app --host 0.0.0.0 --port 8000

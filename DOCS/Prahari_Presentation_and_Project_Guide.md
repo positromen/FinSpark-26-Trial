@@ -11,7 +11,7 @@ This document has five parts. Read them in order the first time; after that, jum
 
 1. **The whole project in plain words** — what Prahari is, told like a story, with everyday examples.
 2. **The 16 slides** — for *each* slide: what it is for, what you **must** put on it, what you **could** add, and a simple script of **what to say** out loud.
-3. **Every diagram explained simply** — all seven pictures, walked through box by box.
+3. **Every diagram explained simply** — all eight pictures, walked through box by box.
 4. **Every word explained simply** — a plain-English dictionary of every technical term we use.
 5. **Cheat-sheet** — the exact numbers, names, passwords and facts to memorise.
 
@@ -52,10 +52,10 @@ Prahari (a Hindi word meaning **"sentinel / guard"**) sits *between* the privile
 
 It is a working **two-sided web app**:
 
-- The **Employee Portal** — what a bank staff member sees. They log in and do their job. Every action is scored and enforced *live*.
-- The **SOC Console** — what the **Security Operations Centre** analyst sees. A live control room: which sessions are active, their risk, alerts, the AI's reasoning, the session replay, a risk heatmap, the access review, and the quantum-safe audit log.
+- The **Employee Portal** — what a bank staff member sees. It is a **real banking desk**: they log in, open accounts, move money, and clear approvals — and every action is scored and enforced *live*. A big transfer is held for a second officer, and a suspicious one is flagged and **flashes a red banner** on the screen.
+- The **SOC Console** — what the **Security Operations Centre** analyst sees. A live control room: which sessions are active, their risk, alerts, the AI's reasoning (an **AI Model Insights** panel that shows *which behaviours* moved the score), one-click **Lock / Approve / Dismiss** buttons, an impact-metrics strip, the session replay, a risk heatmap, the access review, and the quantum-safe audit log.
 
-You can run it on **two computers at once** on the same Wi-Fi: an employee acts on one, and the security team watches it happen **live** on the other, with no refreshing.
+You can run it on **two computers at once** on the same Wi-Fi: an employee acts on one, and the security team watches it happen **live** on the other, with no refreshing. And it starts on **any computer with no compiler or special setup** — the quantum-safe crypto has a built-in pure-Python fallback, so a teammate never hits a build error.
 
 ## The six things the competition asked for — all done
 
@@ -117,7 +117,7 @@ NEED — Must include:
 
 - **Assumption:** privileged activity is available as a stream of events. For the demo, a built-in **simulator** produces it; in production it comes from the bank's **PAM/SIEM** logs.
 - **Inputs per event:** who (user), what (action), which system (resource), how much data (records touched), from where (IP/location), on what (device), and when (timestamp).
-- **Environment:** Python 3.11+, a browser; runs **fully offline** on SQLite. One-time internet only to install and to build the quantum library.
+- **Environment:** Python 3.11+, a browser; runs **fully offline** on SQLite. One-time internet only to `pip install` — **no compiler / build step** (the quantum library has a pure-Python fallback).
 
 OPTIONAL — Could include: access to the IAM directory (roles, vendor/dormant flags, access-expiry dates); no secrets stored in the repo; `.env`-based config.
 
@@ -132,15 +132,16 @@ NEED — Must include (a simple table works):
 
 - **Backend:** Python, **FastAPI** (web server), **SQLAlchemy** (database), **SQLite** (storage, swappable to PostgreSQL).
 - **AI:** **scikit-learn IsolationForest** + per-user behavioural baselines.
-- **Post-quantum crypto:** **liboqs** — **ML-KEM-768** (FIPS 203) and **ML-DSA-65** (FIPS 204); **AES-256-GCM** for the payload.
+- **Post-quantum crypto:** **ML-KEM-768** (FIPS 203) and **ML-DSA-65** (FIPS 204); **AES-256-GCM** for the payload. Native **liboqs** when installed, else a **pure-Python** provider (`kyber-py` / `dilithium-py`) — no compiler.
+- **Banking:** a real ledger (accounts + transactions) with maker-checker and fraud controls.
 - **Real-time:** **WebSocket**.
 - **Frontend:** **React + Vite + Tailwind**.
-- **Testing:** **pytest — 31 automated tests.**
+- **Testing:** **pytest — 40 automated tests.**
 
 OPTIONAL — Could include: PBKDF2 password hashing + signed tokens; Docker; one-command run script.
 
 SCRIPT — Say this:
-> "Standard, production-grade tools. Python and FastAPI for the backend, scikit-learn's IsolationForest for the AI, React for the two dashboards, and — the special part — real NIST post-quantum algorithms via liboqs. Everything is covered by 31 automated tests."
+> "Standard, production-grade tools. Python and FastAPI for the backend, scikit-learn's IsolationForest for the AI, React for the two dashboards, a real banking ledger under the portal, and — the special part — real NIST post-quantum algorithms, which fall back to a pure-Python build so they run on any laptop with no compiler. Everything is covered by 40 automated tests."
 
 ## Slide 5 — Supporting Functional Documents
 
@@ -168,7 +169,8 @@ NEED — Must include — **Differentiators:**
 - We handle **all three insider types**, each with a **different, correct response** — most tools only do anomaly detection.
 - **Explainable AI** — every score comes with plain-English reasons and per-user factors, not a black box.
 - **Real PAM features** — session **recording/replay** and an **access review** — plus **live enforcement** that blocks the action mid-way.
-- **Working post-quantum** vault and tamper-evident audit log.
+- **A real banking desk, not a mock** — staff actually move money; a high-value transfer is **held** for a second officer and a suspicious one is **flagged** and flashed, so insider risk is shown on real transactions.
+- **Working post-quantum** vault and tamper-evident audit log — with a **pure-Python fallback so it runs on any machine with no compiler**.
 
 **Adoption plan (low risk -> high):**
 
@@ -189,12 +191,12 @@ NEED — Must include:
 
 - **`github.com/positromen/FinSpark-26-Trial`**
 - The **architecture diagram** (see Part 3, Diagram 1).
-- A note: **one-command offline run; 31 tests; prebuilt UI committed.**
+- A note: **one-command offline run; 40 tests; prebuilt UI committed.**
 
 OPTIONAL — Could include: the demo accounts table; a QR code to the repo.
 
 SCRIPT — Say this:
-> "Here is the repository. It runs with a single command, fully offline, and ships with 31 passing tests and the prebuilt UI. This is our architecture at a glance — I'll walk through it properly on the architecture slide."
+> "Here is the repository. It runs with a single command, fully offline, and ships with 40 passing tests and the prebuilt UI. This is our architecture at a glance — I'll walk through it properly on the architecture slide."
 
 ## Slide 8 — Business Potential and Relevance
 
@@ -233,7 +235,7 @@ GOAL — *How users interact; why it is simple.*
 NEED — Must include:
 
 - **Two role-based experiences, one login.**
-- **Employee Portal:** a clean action console; feedback is instant and obvious — green *allowed*, an amber **MFA pop-up**, an orange **held-for-approval**, or a full-screen red **BLOCKED**.
+- **Employee Portal:** a real banking desk (**Accounts, Payments, Transactions, Approvals**) plus the action console; feedback is instant and obvious — green *allowed*, an amber **MFA pop-up**, an orange **held-for-approval**, a red **flagged/fraud flash banner**, or a full-screen red **BLOCKED**.
 - **SOC Console:** one screen of situational awareness — live sessions, risk gauge, typed alerts, the AI's reasoning, timeline, session replay, heatmap, access review, and one-click **Lock / Approve / Dismiss** with confirmation.
 - Colour-coded insider types; new alerts **flash**; everything is explained in plain words.
 
@@ -264,13 +266,15 @@ GOAL — *How practical to implement, run, maintain.*
 NEED — Must include:
 
 - **One command** (`run.ps1` / `run.sh`) sets up everything and runs **fully offline**.
+- **No compiler, no build step** — the post-quantum layer auto-falls-back to pure Python, so it starts on any teammate's machine (no *"oqs shared libraries not found"* wall).
+- **Two-computer LAN demo** — the server binds `0.0.0.0`, so a second machine watches live at `http://<host-ip>:8000`.
 - **Docker** ready.
 - Config via `.env`; **no secrets in the repo**.
-- Small, modular, **type-hinted** code; **31 automated tests** guard every change.
-- Post-quantum crypto sits behind **one swappable module**.
+- Small, modular, **type-hinted** code; **40 automated tests** guard every change.
+- Post-quantum crypto sits behind **one swappable module** (native library *or* pure Python).
 
 SCRIPT — Say this:
-> "One command brings up the database, the AI, both dashboards and the API — offline. It's containerised, fully tested, and the crypto is behind a single interface so providers can be swapped without touching the app. A new engineer can run it in under a minute."
+> "One command brings up the database, the AI, both dashboards and the API — offline, with no compiler needed, so it runs on any laptop. It's containerised, fully tested, and the crypto is behind a single interface with a pure-Python fallback, so providers swap without touching the app. A new engineer can run it in under a minute, and two computers can share one live demo over Wi-Fi."
 
 ## Slide 13 — Security Considerations
 
@@ -326,7 +330,7 @@ SCRIPT — Say this:
 
 # PART 3 — Every diagram explained simply
 
-We have **seven** diagrams. For each: what it is, a walk through every box, and why it matters. Imagine each picture is a little comic strip that reads left-to-right and top-to-bottom.
+We have **eight** diagrams. For each: what it is, a walk through every box, and why it matters. Imagine each picture is a little comic strip that reads left-to-right and top-to-bottom.
 
 ## Diagram 1 — System Architecture (the big picture)
 
@@ -347,9 +351,9 @@ Think of a **factory conveyor belt** with six stations. A "raw material" (a priv
 
 ## Diagram 2 — Data Model (the database tables)
 
-![Entity model — the seven tables and how they connect.](img/datamodel.png){width=100%}
+![Entity model — the nine tables and how they connect.](img/datamodel.png){width=100%}
 
-This is the **filing-cabinet layout** — seven drawers and how they reference each other.
+This is the **filing-cabinet layout** — nine drawers and how they reference each other.
 
 - **USER** — every privileged person: their name, role, whether they are dormant or a vendor, and when their access **expires**. *(The staff directory.)*
 - **SESSION** — one login-to-logout window: its status (active/closed/**blocked**), its risk score, and where it came from (IP, location, device). *(One visit to the building.)*
@@ -358,8 +362,10 @@ This is the **filing-cabinet layout** — seven drawers and how they reference e
 - **ALERT** — a warning raised for a risky session: severity, the action taken, and the insider **type**. *(The note the guard writes.)*
 - **AUDITLOGENTRY** — one tamper-proof record: who/what/when, the **hash of the previous entry**, and a **post-quantum signature**. *(A page in a sealed logbook where every page locks the one before it.)*
 - **VAULTITEM** — one stored secret, encrypted; the key is sealed with post-quantum crypto. *(A locked box inside the safe.)*
+- **BANKACCOUNT** — a real bank account: number, holder, type, branch, balance, and status (active/frozen). *(A customer's passbook.)*
+- **BANKTRANSACTION** — one money movement: from/to, amount, mode, status (**cleared / held / flagged**), who made it, and any fraud reason. *(A line in the bank ledger.)*
 
-The **arrows** mean "one-to-many": one USER has many SESSIONS; one SESSION has many EVENTS and a command recording. **Why it matters:** it proves the data is properly structured and that "session recording" and "access expiry" are first-class, real features — not just words.
+The **arrows** mean "one-to-many": one USER has many SESSIONS; one SESSION has many EVENTS and a command recording; one BANKACCOUNT has many BANKTRANSACTIONS. **Why it matters:** it proves the data is properly structured and that "session recording," "access expiry," and a **real banking ledger** are first-class features — not just words.
 
 ## Diagram 3 — Scoring Pipeline (how the number is made)
 
@@ -439,6 +445,19 @@ Because each page locks the page before it (like a blockchain) **and** each page
 
 **Why it matters:** in the live demo you click **Tamper**, and the chain instantly turns red at entry #1 — a dramatic, undeniable proof.
 
+## Diagram 8 — Core-Banking Transfer Flow (money meets the guard)
+
+![Core-banking flow — a transfer is checked for fraud and session risk, then cleared, held, or flagged.](img/bank_flow.png){width=100%}
+
+This is what happens when a portal user clicks **Send** on a transfer. Read it top to bottom — one payment walks through three gates before any money moves.
+
+1. **A transfer is submitted** (from account, to a payee, an amount, a mode like NEFT/RTGS).
+2. **Fraud check.** Is the payee on the **watchlist**? Is the amount **huge** (>= Rs 10,00,000)? Is the **live session risk high** (>= 70, i.e. the insider engine already distrusts this session)? If any is true -> **FLAGGED**: the money does **not** move and a **CRITICAL** alert flashes to the SOC.
+3. **High-value check.** If it's large (> Rs 2,00,000) -> **HELD**: parked for a **second officer** to approve or reject (maker-checker). Nothing moves yet.
+4. **Otherwise -> CLEARED:** the money moves immediately (assuming funds are there and the account isn't frozen).
+
+**Why it matters:** it shows the insider engine and the banking floor are **one loop** — the same risk score that flags a session also **stops the money**. The judges see fraud controls acting on *real transactions*, not a toy demo.
+
 ---
 
 # PART 4 — Every word explained simply
@@ -473,6 +492,13 @@ Because each page locks the page before it (like a blockchain) **and** each page
 - **FastAPI / Uvicorn** — the Python web-server tools serving the API.
 - **SQLite / PostgreSQL** — the database; SQLite for the offline demo, Postgres for scale.
 - **SIEM** — a bank's central log-collection system; a real source of the events we score.
+- **Core-banking desk** — the working Accounts / Payments / Transactions / Approvals screens in the Employee Portal, backed by a real ledger.
+- **Maker-checker (banking)** — a large transfer is **held** until a *second* officer approves it; the maker cannot approve their own.
+- **Flagged / fraud** — a transfer to a watchlisted payee, a huge amount, or one from a high-risk session; the money is stopped and a CRITICAL alert flashes to the SOC.
+- **AI Model Insights** — the SOC panel that shows *which* behaviours (features) moved the score, each versus the user's own baseline and their peers — the explainable face of the AI.
+- **Risk trajectory** — the little sparkline of how the score climbed action by action, showing where it crossed a response threshold.
+- **Impact metrics** — the live strip of program value: sessions watched, threats blocked, money held/flagged, mean time to decision.
+- **PQC provider fallback** — if the native crypto library isn't installed, Prahari uses a **pure-Python** one automatically; no compiler, so it runs on any machine.
 
 ---
 
@@ -505,9 +531,11 @@ Because each page locks the page before it (like a blockchain) **and** each page
 
 **Score formula:** `min(rule points (cap 80) + 0.25 × AI anomaly + 10 peer bonus, 100)`.
 
-**Crypto:** vault = **ML-KEM-768 + AES-256-GCM**; audit = **ML-DSA-65** signatures over a **hash chain**.
+**Banking demo:** on the portal's **Payments** tab — a small transfer **clears**, one over Rs 2,00,000 is **HELD** for a second officer, and one to a watchlisted payee is **FLAGGED** and flashes a red banner + a CRITICAL SOC alert.
 
-**Proof it works:** **31 automated tests** pass; the three scenarios land on **three different** responses; **tamper** breaks the audit chain instantly; runs **fully offline**; works **live across two computers**.
+**Crypto:** vault = **ML-KEM-768 + AES-256-GCM**; audit = **ML-DSA-65** signatures over a **hash chain**. **No compiler needed** — native library or a pure-Python fallback (`GET /pqc/info` shows which).
+
+**Proof it works:** **40 automated tests** pass; the three scenarios land on **three different** responses; a flagged transfer stops real money; **tamper** breaks the audit chain instantly; runs **fully offline** with **no build step**; works **live across two computers**.
 
 **Six judged outcomes — all delivered:** detect misuse · real-time · AI behavioural · risk-based access control · protect admin systems · quantum-proof crypto.
 

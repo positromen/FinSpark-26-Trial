@@ -14,7 +14,7 @@ date: "Repository: github.com/positromen/FinSpark-26-Trial"
 - **Responds** adaptively — **ALLOW / STEP-UP MFA / MAKER-CHECKER / BLOCK** — tagged with the detected **insider type**.
 - **Protects** its own credentials and audit log with **NIST post-quantum cryptography** (ML-KEM-768 vault and ML-DSA-65 signed hash-chain).
 
-It ships as a real two-sided product: an **Employee Portal** where staff act and enforcement happens live, and a **SOC Console** where analysts watch, replay sessions, review access, and verify the audit chain. It runs **fully offline** on SQLite and is one connection string away from PostgreSQL.
+It ships as a real two-sided product: an **Employee Portal** — a working core-banking desk (accounts, payments, transactions, approvals) where staff act and both fraud controls and insider enforcement happen live — and a **SOC Console** where analysts watch, replay sessions, review access, lock or clear a session, and verify the audit chain. It runs **fully offline** on SQLite and is one connection string away from PostgreSQL. The post-quantum layer needs **no compiler**: it auto-selects a native library when present and falls back to a pure-Python implementation otherwise, so any teammate can launch it.
 
 **All six judged outcomes are delivered:** detect misuse of privileged accounts; identify insider threats in real time; AI-driven behavioural analysis; risk-based access control; protect critical administrative systems; and quantum-proof cryptography for credentials and audit artefacts.
 
@@ -56,20 +56,20 @@ The Employee Portal, and in production any PAM/SIEM feed, map onto the same norm
 | Backend / API | Python 3.14, FastAPI + Uvicorn |
 | Storage | SQLAlchemy ORM · SQLite (default) -> PostgreSQL-swappable |
 | AI / UEBA | scikit-learn IsolationForest + peer baselining |
-| Post-quantum crypto | liboqs-python — ML-KEM-768 (FIPS 203), ML-DSA-65 (FIPS 204); AES-256-GCM |
+| Post-quantum crypto | ML-KEM-768 (FIPS 203), ML-DSA-65 (FIPS 204); AES-256-GCM. Native liboqs when present, else pure-Python (kyber-py / dilithium-py) — no compiler |
 | Authentication | PBKDF2-HMAC-SHA256 passwords + HMAC-signed tokens (standard library) |
 | Real-time | FastAPI WebSocket |
 | Frontend | React 19 + Vite + Tailwind 4 (+ Recharts) |
 | Packaging | Docker + docker-compose · run.ps1 / run.sh |
-| Testing | pytest (31 tests) |
+| Testing | pytest (40 tests) |
 
 # Data Model
 
-Seven ORM entities capture the workforce, their recorded sessions and actions, the detection output, and the post-quantum artefacts.
+Nine ORM entities capture the workforce, their recorded sessions and actions, the detection output, the post-quantum artefacts, and the core-banking ledger.
 
-![Entity model — users, sessions, events, recorded commands, alerts, audit entries and vault items.](img/datamodel.png){width=100%}
+![Entity model — users, sessions, events, recorded commands, alerts, audit entries, vault items, and the bank accounts and transactions.](img/datamodel.png){width=100%}
 
-`SessionCommand` is the **privileged-session recording**: every action writes a realistic command line (for example, `psql core-banking-db -c "COPY customers TO '/tmp/out.csv' CSV;" -- 5000 rows`) with an outcome, so a session replays like a terminal transcript.
+`BankAccount` and `BankTransaction` are the **core-banking ledger** that the Employee Portal reads and writes (see *Core Banking Operations*); `SessionCommand` is the **privileged-session recording**: every action writes a realistic command line (for example, `psql core-banking-db -c "COPY customers TO '/tmp/out.csv' CSV;" -- 5000 rows`) with an outcome, so a session replays like a terminal transcript.
 
 **Seeded cast** (all password `prahari123`):
 
@@ -161,9 +161,41 @@ Key safety properties:
 - **Access review** (`GET /soc/access-review`) — every privileged account with standing-risk flags (DORMANT / VENDOR / EXPIRED) and a risk rating, surfacing lingering access *before* anything happens.
 - **Maker-checker approval** (`POST /soc/sessions/{id}/approve`) — an analyst approves a held session; the approval is written to the signed audit log.
 
+## Analyst response actions
+
+The SOC Console turns a flagged session into a one-click decision, each written to the signed audit log and broadcast live:
+
+- **Lock account** (`POST /soc/sessions/{id}/lock`) — force-blocks the session and disables the account; the next login is refused.
+- **Approve / clear** (`POST /soc/sessions/{id}/approve`) — releases a held session for the maker-checker path.
+- **Dismiss** (`POST /soc/sessions/{id}/dismiss`) — marks a flag as a reviewed false-positive and clears it from the live board.
+
+## Explainable model view
+
+- **Model card** (`GET /soc/sessions/{id}/model`) — the UEBA feature breakdown for the session: each feature's value, the user's own baseline, the peer baseline, and its contribution to the anomaly, so an analyst sees *why the model reacted*, not just the number.
+- **Risk trajectory** (`GET /soc/sessions/{id}/trajectory`) — the score after each action, rendered as a sparkline, showing exactly where the session crossed a response threshold.
+- **Impact metrics** (`GET /soc/metrics`) — a live strip of program impact: sessions watched, threats blocked, money held or flagged, and mean time to decision.
+
+# Core Banking Operations
+
+The Employee Portal is a **working core-banking desk**, not a mock: staff open accounts, move money, and clear approvals against a real ledger (`BankAccount`, `BankTransaction`). This is what makes insider risk concrete — the same transfer that a portal user submits is the one Prahari scores and, when needed, holds or blocks.
+
+![Core-banking flow — a transfer is checked for fraud and privileged-session risk, then cleared, held for maker-checker, or flagged.](img/bank_flow.png){width=100%}
+
+Every transfer (`POST /bank/transfer`) runs three gates in `app/bank.py` before money moves:
+
+| Outcome | Trigger | Effect |
+|---|---|---|
+| **FLAGGED** (fraud) | watchlisted beneficiary, amount >= Rs 10,00,000, or live session risk >= 70 | money does **not** move; a **CRITICAL** alert is raised to the SOC |
+| **HELD** (maker-checker) | amount > Rs 2,00,000 | money does **not** move; queued for a second officer to approve or reject |
+| **CLEARED** | none of the above, sufficient funds, active source account | money moves immediately |
+
+Insufficient funds or a frozen source account are refused outright. Held transfers settle only on `POST /bank/transactions/{id}/approve` (a different officer) and reverse on `.../reject`. A high-value or fraudulent transfer **flashes a banner** in the portal and surfaces as a typed alert in the SOC, closing the loop between the banking floor and the analyst.
+
 # Post-Quantum Security Layer
 
 All post-quantum operations sit behind one abstraction, `app/security/pqc.py`, exposing `kem_keypair`, `kem_encapsulate`, `kem_decapsulate`, `sign`, and `verify` over **ML-KEM-768** (FIPS 203) and **ML-DSA-65** (FIPS 204).
+
+**Portable by design — no compiler required.** The module selects a provider at import time: a **native liboqs** binding if one is installed, otherwise a **pure-Python** implementation (`kyber-py` / `dilithium-py`). Nothing to build, no C toolchain, no `cmake` — so a teammate cloning the repo never hits the *"No oqs shared libraries found"* wall. `GET /pqc/info` reports the active provider, and `PRAHARI_PQC=pure` forces the fallback for a reproducible demo. The two providers are interchangeable and the same FIPS algorithms and test suite cover both.
 
 ## Credential vault
 
@@ -200,7 +232,17 @@ This layer is demo-grade by design; a production deployment swaps in the bank's 
 | GET | /soc/access-review | analyst | PAM dormant / vendor / expired table |
 | GET | /soc/sessions/{id}/commands | analyst | session recording replay |
 | GET | /soc/sessions/{id}/events | analyst | session events |
-| POST | /soc/sessions/{id}/approve | analyst | maker-checker approval |
+| POST | /soc/sessions/{id}/approve | analyst | approve / clear a held session |
+| POST | /soc/sessions/{id}/lock | analyst | force-block session + disable account |
+| POST | /soc/sessions/{id}/dismiss | analyst | mark a flag reviewed (false-positive) |
+| GET | /soc/sessions/{id}/model | analyst | UEBA feature breakdown (explainable) |
+| GET | /soc/sessions/{id}/trajectory | analyst | per-action score trajectory |
+| GET | /soc/metrics | analyst | live impact metrics strip |
+| GET | /bank/accounts, /transactions | employee | account list / ledger |
+| GET | /bank/pending, /beneficiaries | employee | held queue / payees |
+| POST | /bank/transfer | employee | submit a transfer -> fraud + risk gated |
+| POST | /bank/transactions/{id}/approve | employee | settle a held transfer (second officer) |
+| POST | /bank/transactions/{id}/reject | employee | reverse a held transfer |
 | POST | /demo/scenario/{kind} | analyst | run scripted malicious / compromised / negligent |
 | POST | /demo/tamper | analyst | edit an audit entry (proves detection) |
 | GET | /audit, /audit/verify | analyst | list / verify the signed chain |
@@ -216,8 +258,8 @@ Interactive API docs are served at `/docs` (FastAPI / OpenAPI).
 React 19 + Vite + Tailwind 4, dark SOC theme, served by FastAPI from `frontend/dist` (same-origin, offline).
 
 - **Login** (`pages/Login.jsx`) — role-routed, with a demo-account helper.
-- **Employee Portal** (`pages/Portal.jsx`) — action console, connection badge, live risk gauge, activity timeline, MFA modal, maker-checker banner, and a full-screen BLOCK overlay.
-- **SOC Console** (`pages/SocConsole.jsx`) — three scenario buttons, an audit banner, and panels: live sessions (typed), risk gauge, why-flagged, alerts (typed), timeline, session recording (terminal replay), heatmap, and access review.
+- **Employee Portal** (`pages/Portal.jsx`) — a working banking desk (Accounts, Payments, Transactions, Approvals) with a fraud/high-value **flash banner** and live KPIs, plus the privileged-action console: connection badge, live risk gauge, activity timeline, MFA modal, maker-checker banner, and a full-screen BLOCK overlay.
+- **SOC Console** (`pages/SocConsole.jsx`) — three scenario buttons, an audit banner, an impact-metrics strip, one-click **Lock / Approve / Dismiss** response actions with toast feedback, an **AI Model Insights** panel (feature breakdown + baselines) and risk-trajectory sparkline, and panels: live sessions (typed), risk gauge, why-flagged, alerts (typed), timeline, session recording (terminal replay), heatmap, and access review.
 
 The colour system reserves status colours (good / warning / serious / critical), colour-codes insider types (malicious red, compromised blue, negligent amber), uses tabular numerics, flashes on new alerts, and never encodes meaning by colour alone.
 
@@ -255,25 +297,26 @@ The colour system reserves status colours (good / warning / serious / critical),
 docker compose up --build      # container alternative
 ```
 
-Then open `http://127.0.0.1:8000`. The first run on a fresh machine needs internet once (pip install plus a one-time liboqs build); afterwards it is fully offline. Run tests with `.venv/Scripts/python -m pytest`.
+Then open `http://127.0.0.1:8000`. The first run on a fresh machine needs internet once for `pip install` — there is **no compiler step** (the post-quantum layer ships a pure-Python fallback); afterwards it is fully offline. For a two-computer LAN demo the server binds `0.0.0.0` so a second machine reaches it at `http://<host-ip>:8000`. Run tests with `.venv/Scripts/python -m pytest`.
 
 # Testing
 
-The suite contains **31 pytest tests**, including:
+The suite contains **40 pytest tests**, including:
 
 - **test_simulator** — user seeding, normal-day realism, determinism.
 - **test_detection** — every rule, normal-versus-attack scoring, quiet-on-normal.
 - **test_scenarios** — the three insider scenarios land on distinct, correct paths and the type-aware policy holds (negligence never auto-blocks), on an independent seed.
 - **test_phase3** — attack block, alert, and the WebSocket loop.
 - **test_portal** — authentication, role gating, live enforcement, MFA without event stacking, and blocked-stays-locked.
-- **test_pqc** — KEM round-trip, sign/verify with forgery rejection, vault round-trip, and audit chain clean / tamper / signature-forgery.
+- **test_pqc** — KEM round-trip, sign/verify with forgery rejection, vault round-trip, and audit chain clean / tamper / signature-forgery (run against both PQC providers).
+- **test_bank** — transfers move money, high-value holds, watchlist / huge-amount / high-risk-session transfers flag, held transfers settle on approval, and insufficient-funds / frozen-account transfers are refused.
 
 # Demo Walkthrough
 
 Full narration is in `DEMO_SCRIPT.md`. In brief (two browser windows, side by side):
 
 1. **SOC Console** (`soc_admin`) — quiet, with a green heatmap.
-2. **Employee Portal** (`rmehta`) — a normal query is ALLOWED; an export of 1000 records triggers STEP-UP MFA (code `246810`).
+2. **Employee Portal** (`rmehta`) — a normal query is ALLOWED; an export of 1000 records triggers STEP-UP MFA (code `246810`). On the **banking desk**, a small transfer clears instantly, a high-value one is **HELD** for maker-checker, and a transfer to a watchlisted payee is **FLAGGED** and flashes a banner — surfacing as a CRITICAL alert in the SOC.
 3. **Attacker** (`ext_dsouza`) — escalate then export 5000 records -> full-screen BLOCK; the account is locked.
 4. **SOC lights up** — a red live session at 100, a flashed CRITICAL alert tagged `malicious`, the why-flagged panel, the session replay (export struck through as DENIED), and a red heatmap cell.
 5. **Two more insider types** — the SOC buttons run Compromised -> MFA and Negligent -> maker-checker, each correctly typed.
@@ -295,6 +338,7 @@ PRAHARI/
   app/
     main.py               FastAPI app + lifespan + static UI mount
     config.py             pydantic settings (.env)
+    bank.py               core-banking engine (transfers, maker-checker, fraud)
     pam.py                session-command recording + access review
     api/routes.py         REST + WebSocket endpoints
     api/ws.py             WebSocket broadcast manager
@@ -305,12 +349,12 @@ PRAHARI/
     detection/live.py     live per-action scoring & enforcement
     models/entities.py    ORM entities
     security/auth.py      PBKDF2 passwords + HMAC tokens
-    security/pqc.py       ML-KEM-768 / ML-DSA-65 abstraction
+    security/pqc.py       ML-KEM-768 / ML-DSA-65 (native or pure-Python)
     security/vault.py     quantum-safe credential vault
     security/audit.py     hash-chained + signed audit log
     simulator/            normal-day generator, 3 scenarios, seeder
   frontend/               React app (pages/ + components/) + prebuilt dist/
-  tests/                  31 pytest tests
+  tests/                  40 pytest tests
   docs/                   this documentation + submission deck
   DOCUMENTATION.md  DEMO_SCRIPT.md  PROJECT_STATUS.md  README.md
   run.ps1  run.sh  Dockerfile  docker-compose.yml  requirements.txt

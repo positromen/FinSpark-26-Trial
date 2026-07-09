@@ -100,16 +100,40 @@ def datamodel():
     ent(3, 60, "AUDITLOGENTRY", ["actor, action, payload", "prev_hash", "entry_hash", "signature (ML-DSA-65)"])
     ent(37, 60, "SESSIONCOMMAND", ["session_id", "command (transcript)", "action_type, resource", "outcome EXECUTED/DENIED/HELD"])
     ent(71, 60, "ALERT", ["session_id", "severity", "action_taken", "insider_type", "message"])
-    # bottom row
+    # bottom row — vault + the two core-banking tables
     ent(3, 31, "VAULTITEM", ["name", "ciphertext (AES-256-GCM)", "nonce", "kem_ciphertext (ML-KEM)"])
+    ent(37, 31, "BANKACCOUNT", ["number, holder", "acc_type, branch", "balance", "status ACTIVE/DORMANT/FROZEN"])
+    ent(71, 31, "BANKTRANSACTION", ["from_number, to_number", "amount, mode", "status CLEARED/HELD/FLAGGED", "maker, flagged_reason"])
     # relationships
     arrow(ax, 30, 91, 37, 91, GREY); arrow(ax, 64, 91, 71, 91, GREY)
     arrow(ax, 50, 74, 50, 60, GREY)          # SESSION -> SESSIONCOMMAND
     arrow(ax, 62, 82, 80, 60, GREY)          # SESSION -> ALERT
-    ax.text(50, 3, "One USER → many SESSIONs → many EVENTs; each SESSION carries a recorded command trail (SessionCommand); "
-            "alerts, audit entries and vault items complete the model.",
-            ha="center", color=GREY, fontsize=8.2, style="italic")
+    arrow(ax, 64, 25, 71, 25, GREY)          # BANKACCOUNT -> BANKTRANSACTION
+    ax.text(50, 3, "Privileged-access side: USER → SESSION → EVENT (+ recorded commands, alerts, audit, vault).  "
+            "Core-banking side: BANKACCOUNT → BANKTRANSACTION.",
+            ha="center", color=GREY, fontsize=8.0, style="italic")
     save(fig, "datamodel.png")
+
+
+# ---------------------------------------------------------------- banking flow
+def bank_flow():
+    fig, ax = canvas(12, 4.8)
+    box(ax, 3, 60, 22, 16, "Employee submits\ntransfer\n(from → payee, ₹amount)", GREY, fs=9)
+    box(ax, 31, 60, 22, 16, "Banking controls\nfunds · limits · fraud ·\nsession risk", BLUE, fs=9)
+    arrow(ax, 25, 68, 31, 68)
+    outs = [
+        ("CLEARED", GREEN, "white", "money moves,\nledger posted", 60),
+        ("HELD", ORANGE, "white", "maker-checker:\n> ₹2,00,000 held\nfor 2nd approver", 60),
+        ("FLAGGED", RED, "white", "suspected fraud:\nwatch-list / huge /\nhigh-risk session →\nheld + SOC alert", 60),
+    ]
+    ys = [78, 55, 30]
+    for (lbl, col, tc, desc, _), y in zip(outs, ys):
+        box(ax, 62, y, 15, 11, lbl, col, tc=tc, fs=10)
+        box(ax, 79, y, 18, 11, desc, "#F2F2F0", tc=INK, fs=7.4, bold=False, ec="#DDD")
+        arrow(ax, 53, 68, 62, y + 5.5, col if lbl != "CLEARED" else GREEN)
+    ax.text(50, 6, "Held & flagged transfers raise a colour-coded SOC alert and are sealed into the ML-DSA-65 audit chain.",
+            ha="center", color=GREY, fontsize=8.4, style="italic")
+    save(fig, "bank_flow.png")
 
 
 # ---------------------------------------------------------------- scoring
@@ -216,5 +240,5 @@ def live_sequence():
 
 if __name__ == "__main__":
     architecture(); datamodel(); scoring(); insider_types()
-    pqc_vault(); audit_chain(); live_sequence()
+    pqc_vault(); audit_chain(); live_sequence(); bank_flow()
     print("all diagrams written to", OUT)

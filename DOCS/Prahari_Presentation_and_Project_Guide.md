@@ -57,14 +57,21 @@ It is a working **two-sided web app**:
 
 You can run it on **two computers at once** on the same Wi-Fi: an employee acts on one, and the security team watches it happen **live** on the other, with no refreshing. And it starts on **any computer with no compiler or special setup** — the quantum-safe crypto has a built-in pure-Python fallback, so a teammate never hits a build error.
 
+Four more things make it feel like a real bank product, not a demo:
+
+- **Risk-based login.** A risky account (dormant, expired, strange network) must pass **extra verification at the sign-in screen itself** — a stolen password alone gets nobody in.
+- **Just-in-time (JIT) access.** Nobody holds standing power: to escalate privilege you **request a time-boxed grant with a reason**, an analyst approves it, and it **expires by itself**. With the grant the same click is sanctioned; without it, it's an alarm.
+- **Credential checkout.** The bank's most sensitive passwords live sealed in the quantum-safe vault and only come out on a **5-minute, risk-gated lease** — a suspicious session is refused, and the refusal itself becomes signed evidence.
+- **Measured AI + signed evidence.** The AI's accuracy is **benchmarked and shown on screen** (100% detection, zero false blocks), and any incident exports as a **digitally signed evidence pack** for compliance.
+
 ## The six things the competition asked for — all done
 
-1. **Detect misuse of privileged accounts** — done (rule engine).
+1. **Detect misuse of privileged accounts** — done (rule engine + banking fraud gates).
 2. **Identify insider threats in real time** — done (live scoring + WebSocket push).
-3. **AI-driven behavioural analysis** — done (IsolationForest + per-user baselines).
-4. **Risk-based access control** — done (allow / MFA / maker-checker / block).
-5. **Protect critical administrative systems** — done (blocks the action before damage; locks the account).
-6. **Quantum-proof cryptography** — done (ML-KEM-768 vault + ML-DSA-65 signed audit log).
+3. **AI-driven behavioural analysis** — done (IsolationForest + per-user baselines + a **measured benchmark**).
+4. **Risk-based access control** — done, **from login to logout** (risk-based login at the door, then allow / MFA / maker-checker / block).
+5. **Protect critical administrative systems** — done (blocks before damage; locks the account; **JIT elevation**; **vault checkout**).
+6. **Quantum-proof cryptography** — done (ML-KEM-768 vault + ML-DSA-65 signed audit log + signed incident reports).
 
 ---
 
@@ -136,12 +143,12 @@ NEED — Must include (a simple table works):
 - **Banking:** a real ledger (accounts + transactions) with maker-checker and fraud controls.
 - **Real-time:** **WebSocket**.
 - **Frontend:** **React + Vite + Tailwind**.
-- **Testing:** **pytest — 40 automated tests.**
+- **Testing:** **pytest — 54 automated tests.**
 
 OPTIONAL — Could include: PBKDF2 password hashing + signed tokens; Docker; one-command run script.
 
 SCRIPT — Say this:
-> "Standard, production-grade tools. Python and FastAPI for the backend, scikit-learn's IsolationForest for the AI, React for the two dashboards, a real banking ledger under the portal, and — the special part — real NIST post-quantum algorithms, which fall back to a pure-Python build so they run on any laptop with no compiler. Everything is covered by 40 automated tests."
+> "Standard, production-grade tools. Python and FastAPI for the backend, scikit-learn's IsolationForest for the AI, React for the two dashboards, a real banking ledger under the portal, and — the special part — real NIST post-quantum algorithms, which fall back to a pure-Python build so they run on any laptop with no compiler. Everything is covered by 54 automated tests."
 
 ## Slide 5 — Supporting Functional Documents
 
@@ -167,10 +174,11 @@ GOAL — *What makes you different, and how a bank would adopt it.*
 NEED — Must include — **Differentiators:**
 
 - We handle **all three insider types**, each with a **different, correct response** — most tools only do anomaly detection.
-- **Explainable AI** — every score comes with plain-English reasons and per-user factors, not a black box.
-- **Real PAM features** — session **recording/replay** and an **access review** — plus **live enforcement** that blocks the action mid-way.
+- **Explainable AND measured AI** — every score comes with plain-English reasons and per-user factors, and the model's accuracy is benchmarked on screen (100% detection, 0 false blocks).
+- **Full PAM depth** — session **recording/replay**, an **access review**, **just-in-time elevation** (no standing privilege), and a **risk-gated credential checkout** — plus **live enforcement** that blocks the action mid-way.
+- **Risk-based authentication end to end** — the risk engine guards the **login screen itself**, not just the session.
 - **A real banking desk, not a mock** — staff actually move money; a high-value transfer is **held** for a second officer and a suspicious one is **flagged** and flashed, so insider risk is shown on real transactions.
-- **Working post-quantum** vault and tamper-evident audit log — with a **pure-Python fallback so it runs on any machine with no compiler**.
+- **Working post-quantum** vault, tamper-evident audit log, and **signed incident reports** — with a **pure-Python fallback so it runs on any machine with no compiler**.
 
 **Adoption plan (low risk -> high):**
 
@@ -181,7 +189,7 @@ NEED — Must include — **Differentiators:**
 OPTIONAL — Could include: integrations (CyberArk/BeyondTrust PAM, Splunk/QRadar SIEM, the bank's SSO).
 
 SCRIPT — Say this:
-> "Three differentiators. One: we cover all three insider types with distinct responses. Two: the AI is fully explainable. Three: we ship real post-quantum crypto, not a promise. Adoption is staged — start in monitor-only mode to build trust, then switch on step-up verification, and finally auto-blocking."
+> "Four differentiators. One: we cover all three insider types with distinct responses. Two: the AI is explainable *and measured* — 100% detection with zero false blocks on a held-out benchmark. Three: real PAM depth — just-in-time elevation and a risk-gated quantum-safe credential checkout, so there's no standing privilege. Four: we ship real post-quantum crypto, not a promise. Adoption is staged — monitor-only first, then step-up verification, then auto-blocking."
 
 ## Slide 7 — GitHub Repository Link & supporting diagrams
 
@@ -191,12 +199,12 @@ NEED — Must include:
 
 - **`github.com/positromen/FinSpark-26-Trial`**
 - The **architecture diagram** (see Part 3, Diagram 1).
-- A note: **one-command offline run; 40 tests; prebuilt UI committed.**
+- A note: **one-command offline run; 54 tests; prebuilt UI committed.**
 
 OPTIONAL — Could include: the demo accounts table; a QR code to the repo.
 
 SCRIPT — Say this:
-> "Here is the repository. It runs with a single command, fully offline, and ships with 40 passing tests and the prebuilt UI. This is our architecture at a glance — I'll walk through it properly on the architecture slide."
+> "Here is the repository. It runs with a single command, fully offline, and ships with 54 passing tests and the prebuilt UI. This is our architecture at a glance — I'll walk through it properly on the architecture slide."
 
 ## Slide 8 — Business Potential and Relevance
 
@@ -220,10 +228,12 @@ GOAL — *What is innovative or original.*
 NEED — Must include:
 
 - **One engine, three insider types** — and a **type-aware policy**: negligence is sent to a **human review**, never auto-blocked like an attack.
-- **Rules + AI fused into one explainable 0–100 score** with a per-user "unusual for *this* person" layer.
+- **Rules + AI fused into one explainable 0–100 score** with a per-user "unusual for *this* person" layer — and the AI is **measured**, not just claimed (a held-out benchmark on screen).
+- **Risk-based control from the front door** — the same engine challenges a risky **login** with MFA before any token is issued.
+- **No standing privilege** — escalation needs an approved, auto-expiring **JIT grant**; secrets come out of the quantum vault only on a **risk-gated 5-minute lease**.
 - **PAM + UEBA + post-quantum in one offline-capable product** — a combination competitors don't ship together.
 - **Live enforcement** — it stops the action *in progress* and **locks the account**; a blocked user cannot simply log in again.
-- **Tamper-evident, quantum-safe audit** — you literally cannot silently edit the log.
+- **Tamper-evident, quantum-safe audit** — you literally cannot silently edit the log; incidents export as **ML-DSA-signed evidence packs**.
 
 SCRIPT — Say this:
 > "The novelty is the combination. One engine classifies the insider type and responds appropriately — we never hard-block mere negligence. The AI explains itself per user. And we put PAM, behavioural AI, and NIST post-quantum crypto into a single product that runs offline — which nobody else ships together."
@@ -235,7 +245,7 @@ GOAL — *How users interact; why it is simple.*
 NEED — Must include:
 
 - **Two role-based experiences, one login.**
-- **Employee Portal:** a real banking desk (**Accounts, Payments, Transactions, Approvals**) plus the action console; feedback is instant and obvious — green *allowed*, an amber **MFA pop-up**, an orange **held-for-approval**, a red **flagged/fraud flash banner**, or a full-screen red **BLOCKED**.
+- **Employee Portal:** a real banking desk (**Accounts, Payments, Transactions, Approvals**) plus the action console, a **Credential Vault** (checkout with a live lease countdown) and a **JIT Access** desk (request elevation, watch it activate and expire); feedback is instant and obvious — green *allowed*, an amber **MFA pop-up**, an orange **held-for-approval**, a red **flagged/fraud flash banner**, or a full-screen red **BLOCKED**.
 - **SOC Console:** one screen of situational awareness — live sessions, risk gauge, typed alerts, the AI's reasoning, timeline, session replay, heatmap, access review, and one-click **Lock / Approve / Dismiss** with confirmation.
 - Colour-coded insider types; new alerts **flash**; everything is explained in plain words.
 
@@ -270,7 +280,7 @@ NEED — Must include:
 - **Two-computer LAN demo** — the server binds `0.0.0.0`, so a second machine watches live at `http://<host-ip>:8000`.
 - **Docker** ready.
 - Config via `.env`; **no secrets in the repo**.
-- Small, modular, **type-hinted** code; **40 automated tests** guard every change.
+- Small, modular, **type-hinted** code; **54 automated tests** guard every change.
 - Post-quantum crypto sits behind **one swappable module** (native library *or* pure Python).
 
 SCRIPT — Say this:
@@ -286,7 +296,7 @@ NEED — Must include:
 - **Credential protection** — the vault seals secrets with **ML-KEM-768 + AES-256-GCM** (quantum-safe).
 - **Audit integrity** — every entry is **hash-chained and ML-DSA-65 signed**; tampering is provable.
 - **Enforcement is server-side** — blocked accounts stay locked; a challenged action isn't saved until it's actually allowed (no gaming the score).
-- **Access control** — passwords are **PBKDF2-hashed**, sessions use **signed tokens**, and SOC APIs are **analyst-only**.
+- **Access control** — passwords are **PBKDF2-hashed**, sessions use **signed tokens**, SOC APIs are **analyst-only**, and a **risky login must pass step-up MFA at the door**.
 - **Offline by design** — no external calls at run time; keys never committed.
 
 SCRIPT — Say this:
@@ -351,9 +361,9 @@ Think of a **factory conveyor belt** with six stations. A "raw material" (a priv
 
 ## Diagram 2 — Data Model (the database tables)
 
-![Entity model — the nine tables and how they connect.](img/datamodel.png){width=100%}
+![Entity model — the eleven tables and how they connect.](img/datamodel.png){width=100%}
 
-This is the **filing-cabinet layout** — nine drawers and how they reference each other.
+This is the **filing-cabinet layout** — eleven drawers and how they reference each other.
 
 - **USER** — every privileged person: their name, role, whether they are dormant or a vendor, and when their access **expires**. *(The staff directory.)*
 - **SESSION** — one login-to-logout window: its status (active/closed/**blocked**), its risk score, and where it came from (IP, location, device). *(One visit to the building.)*
@@ -364,8 +374,10 @@ This is the **filing-cabinet layout** — nine drawers and how they reference ea
 - **VAULTITEM** — one stored secret, encrypted; the key is sealed with post-quantum crypto. *(A locked box inside the safe.)*
 - **BANKACCOUNT** — a real bank account: number, holder, type, branch, balance, and status (active/frozen). *(A customer's passbook.)*
 - **BANKTRANSACTION** — one money movement: from/to, amount, mode, status (**cleared / held / flagged**), who made it, and any fraud reason. *(A line in the bank ledger.)*
+- **JITGRANT** — one just-in-time elevation request: who, which privilege, the justification, the duration, its status (**pending / active / denied / expired**), who approved it, and when it expires. *(A visitor pass with an expiry time printed on it.)*
+- **CREDENTIALCHECKOUT** — one vault checkout: which secret, who took it, when the lease ends, the session risk at the moment of checkout, and whether it was **refused**. *(The sign-out register for the key safe — including the times the safe said no.)*
 
-The **arrows** mean "one-to-many": one USER has many SESSIONS; one SESSION has many EVENTS and a command recording; one BANKACCOUNT has many BANKTRANSACTIONS. **Why it matters:** it proves the data is properly structured and that "session recording," "access expiry," and a **real banking ledger** are first-class features — not just words.
+The **arrows** mean "one-to-many": one USER has many SESSIONS; one SESSION has many EVENTS and a command recording; one BANKACCOUNT has many BANKTRANSACTIONS; one VAULTITEM has many CHECKOUTS. **Why it matters:** it proves the data is properly structured and that "session recording," "access expiry," a **real banking ledger**, and the **JIT / checkout PAM workflows** are first-class features — not just words.
 
 ## Diagram 3 — Scoring Pipeline (how the number is made)
 
@@ -499,6 +511,11 @@ This is what happens when a portal user clicks **Send** on a transfer. Read it t
 - **Risk trajectory** — the little sparkline of how the score climbed action by action, showing where it crossed a response threshold.
 - **Impact metrics** — the live strip of program value: sessions watched, threats blocked, money held/flagged, mean time to decision.
 - **PQC provider fallback** — if the native crypto library isn't installed, Prahari uses a **pure-Python** one automatically; no compiler, so it runs on any machine.
+- **Risk-based authentication (adaptive login)** — the sign-in screen itself demands a one-time code when the account's context is risky (dormant, expired, strange network/device). *The doorman asks for ID before you're even inside.*
+- **JIT (just-in-time) access** — privilege is requested with a reason, approved by an analyst, and **expires by itself**. With an active grant the escalation is sanctioned; without one it's an alarm. *A visitor pass instead of a permanent master key.*
+- **Credential checkout** — a sealed secret is released for a short lease (5 min) only if your session is trusted; refusals are recorded as evidence. *Signing a key out of the safe — and the safe can say no.*
+- **Measured performance** — the AI's accuracy proven on held-out data: 100% detection, 0 false blocks, shown live in the SOC. *The report card, not just the claim.*
+- **Evidence pack** — a one-click incident report (replay, trajectory, model reasoning, audit extract) sealed with a post-quantum signature. *A court-ready file that proves itself.*
 
 ---
 
@@ -533,9 +550,15 @@ This is what happens when a portal user clicks **Send** on a transfer. Read it t
 
 **Banking demo:** on the portal's **Payments** tab — a small transfer **clears**, one over Rs 2,00,000 is **HELD** for a second officer, and one to a watchlisted payee is **FLAGGED** and flashes a red banner + a CRITICAL SOC alert.
 
-**Crypto:** vault = **ML-KEM-768 + AES-256-GCM**; audit = **ML-DSA-65** signatures over a **hash chain**. **No compiler needed** — native library or a pure-Python fallback (`GET /pqc/info` shows which).
+**Risk-based login:** `ext_dsouza` is challenged at the sign-in screen (dormant + expired + strange context) — code `246810` gets him in, and the behavioural engine catches him inside anyway.
 
-**Proof it works:** **40 automated tests** pass; the three scenarios land on **three different** responses; a flagged transfer stops real money; **tamper** breaks the audit chain instantly; runs **fully offline** with **no build step**; works **live across two computers**.
+**JIT + vault demo:** escalate without a grant -> alarm; request 15-min JIT grant -> analyst approves -> same click **sanctioned**; grant auto-expires. Vault checkout -> secret on a **5-minute countdown**; a blocked session is **refused** and the refusal is signed evidence.
+
+**Measured AI (say these):** on a held-out month — **100% detection**, **100% correct response and type**, **0 false blocks** on 230 benign sessions, **1.7% false alarms**.
+
+**Crypto:** vault = **ML-KEM-768 + AES-256-GCM**; audit = **ML-DSA-65** signatures over a **hash chain**; incidents export as **signed evidence packs**. **No compiler needed** — native library or a pure-Python fallback (`GET /pqc/info` shows which).
+
+**Proof it works:** **54 automated tests** pass; the three scenarios land on **three different** responses; a flagged transfer stops real money; **tamper** breaks the audit chain instantly; runs **fully offline** with **no build step**; works **live across two computers**.
 
 **Six judged outcomes — all delivered:** detect misuse · real-time · AI behavioural · risk-based access control · protect admin systems · quantum-proof crypto.
 

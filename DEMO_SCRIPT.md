@@ -1,212 +1,228 @@
-# Prahari — Demo Script (6–7 minutes)
+# Prahari — Complete Demo & Usage Guide
 
-Prahari is now a **two-sided product**:
+*The sentinel for privileged access — detect with explainable AI + rules, respond in real time, remove standing privilege, and keep the proof quantum-safe.*
 
-- **Employee Portal** — privileged bank staff log in and perform real actions
-  (query, export, config change, privilege escalation). Every action is scored
-  and enforced live.
-- **SOC Console** — the security team logs into Prahari itself and watches every
-  privileged session in real time, with alerts, a risk heatmap, and the
-  post-quantum audit log.
-
-The demo is best run with **two browser windows side by side**: the SOC Console on
-the left, the Employee Portal on the right.
+This one file is everything you need: **how to set up**, **how to use every feature**, the **timed judge demo script**, **Q&A answers**, and the **numbers to quote**.
 
 ---
 
-## Accounts (all password `prahari123`)
+## The scorecard — PS1 vs Prahari (memorise this table)
 
-| Username | Who | Use for |
+| Problem statement asks for | Prahari delivers | Where you show it |
 |---|---|---|
-| `soc_admin` | Meera Nair, SOC analyst | the **SOC Console** (left window) |
-| `rmehta` | Rajesh Mehta, DBA | a **normal employee** |
-| `ext_dsouza` | Kevin D'Souza, dormant vendor | the **attacker** |
+| Detect misuse of privileged accounts | 11-rule engine + session recording + banking fraud gates | Action Console, Replay, Payments |
+| Identify insider threats **in real time** | every action scored & enforced *before it executes*; WebSocket push | two-computer live demo |
+| **AI-driven behavioural analysis** | IsolationForest UEBA + per-user baselines + **measured**: 100% detection, 0 false blocks | AI Model Insights |
+| **Risk-based access control** | ALLOW → MFA → maker-checker → BLOCK, insider-type-aware | the three scenarios |
+| **Risk-Based Authentication** | risky logins must pass step-up MFA **at the door** | ext_dsouza login |
+| Protect critical administrative systems | server-side blocks, account lockout, **JIT access**, **credential checkout**, access review | JIT desk, Credential Vault |
+| **Quantum-Proof Cryptography** | ML-KEM-768 vault · ML-DSA-65 signed audit chain · signed incident reports | Verify / Tamper, Evidence pack |
 
-MFA step-up code (demo): **`246810`**
+All six expected outcomes plus every focus area — including **PAM** (recording, access review, JIT, checkout) and **Risk-Based Authentication** — are live in the product, verified by **54 automated tests**.
 
 ---
 
-## Setup at the venue (offline)
+## 1 · Setup
+
+### Requirements
+
+Python 3.11+, a browser. **No compiler, no cmake, no internet at demo time.** The post-quantum layer auto-selects: native `liboqs` if present, otherwise a pure-Python provider — it runs on any teammate's laptop.
+
+### Start (always start fresh for a demo)
 
 ```powershell
-.\run.ps1 -Reset        # clean DB + baseline history, server on :8000
+.\run.ps1 -Reset        # wipes + reseeds DB, trains baseline, serves on :8000
 ```
 
-`run.ps1` prints two URLs — **This computer** (`http://localhost:8000`) and
-**Other computers** (`http://<LAN-IP>:8000`).
+> **Always use `-Reset` before a demo** — a previous run may have tampered the audit
+> chain (that's the point of the Tamper button) and locked accounts.
 
-### Two-computer demo (recommended)
+`run.ps1` prints two URLs — **This computer** (`http://localhost:8000`) and **Other computers** (`http://<LAN-IP>:8000`).
 
-Run the server on **one** laptop (the SOC machine). Then:
+### Two-computer demo (recommended — this is the "wow")
 
-- **Computer 1 — SOC big screen:** open `http://localhost:8000`, sign in as
-  `soc_admin`. Leave it on the **Overview** — the header shows a green **LIVE** dot.
-- **Computer 2 — employee:** on the same Wi-Fi, open the **Other computers** URL
-  (`http://<LAN-IP>:8000`) and sign in as `rmehta` / `ext_dsouza` / `ext_rao`.
+- **Computer 1 (SOC big screen):** `http://localhost:8000` → sign in `soc_admin`. Leave on **Overview**; the header shows a green **LIVE** dot.
+- **Computer 2 (employee):** same Wi-Fi, open the LAN URL → sign in as the employee accounts below.
 
-Everything the employee does on Computer 2 appears on Computer 1 **instantly** — the
-session shows up on login, the score climbs per action, alerts flash, the block lands,
-and the SOC screen auto-follows the flagged session. No refreshing, no buttons needed.
+Everything the employee does appears on the SOC screen **instantly** — no refresh. If Computer 2 can't connect, allow port 8000 through Windows Firewall on Computer 1:
+`New-NetFirewallRule -DisplayName Prahari -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow`
 
-> First time only: if Computer 2 can't reach the server, allow **port 8000** through
-> Windows Firewall on Computer 1 (accept the prompt on first `run.ps1`, or:
-> `New-NetFirewallRule -DisplayName Prahari -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow`).
+Single laptop: two browser windows side by side works just as well.
 
-### Single-laptop demo
+### Accounts (all password `prahari123` · MFA code `246810`)
 
-Open **http://localhost:8000** in two browser windows side by side; log one in as
-`soc_admin` and the other as an employee. The scenario buttons on the SOC header
-(☠ / 🎭 / ⚠) also drive the whole story from one screen if you prefer.
+| Login | Who | Use for |
+|---|---|---|
+| `soc_admin` | Meera Nair, SOC analyst | the **SOC Console** |
+| `rmehta` | Rajesh Mehta, DBA | the **normal employee** (banking + JIT + vault) |
+| `ext_dsouza` | Kevin D'Souza, dormant vendor | the **malicious attacker** (gets MFA-challenged at login) |
+| `ext_rao` | Priya Rao, vendor w/ expired access | the **negligent** case |
 
 ---
 
-## The demo
+## 2 · Every feature and how to use it
 
-### 0:00 — The SOC Console (left window, logged in as soc_admin)
+### 2.1 Risk-based authentication (the front door)
 
-> "This is Prahari's security operations console. It's watching the bank's
-> privileged users — DBAs, sysadmins, a network admin, an app admin. Right now
-> everyone's quiet. This heatmap is each user's risk over the last two weeks —
-> all green. Prahari learned what 'normal' looks like for each person using an
-> IsolationForest behavioural model trained on their real history."
+- `rmehta` signs in with just a password — trusted context, straight in.
+- `ext_dsouza` signs in → **amber step-up screen** listing *why*: dormant account waking up · access expired 120 days ago · unrecognized network/device. Enter `246810` to proceed.
+- A wrong code = 401 + a WARNING alert on the SOC + an audit entry. Every challenge/verification is sealed to the audit chain.
 
-### 1:00 — A normal employee works (right window)
+**The line to say:** *"A stolen password is not enough. The same signals our detection engine scores are checked at login — and even when the attacker passes MFA, the behavioural engine is waiting inside."*
 
-Log in as `rmehta` / `prahari123`. You're now in the **Employee Portal** as a DBA.
+### 2.2 Employee Portal — the banking desk (login as `rmehta`)
 
-> "This is what a bank admin sees — a privileged-access portal. I'm Rajesh, a
-> database admin. Let me do my normal job."
+| Tab | What it does |
+|---|---|
+| **Dashboard** | live KPIs: accounts, pending approvals, deposits, session risk gauge |
+| **Customer Accounts** | 6 seeded accounts, masked numbers, live balances, status (one FROZEN) |
+| **Payments & Transfers** | real transfers: ≤ ₹2L **CLEARS** instantly · > ₹2L **HELD** for a second officer · watchlisted payee (⚠), ≥ ₹10L, or session risk ≥ 70 → **FLAGGED** as fraud with a red flash banner + CRITICAL SOC alert |
+| **Transactions** | the live ledger with statuses and fraud reasons |
+| **Approvals** | maker-checker queue — a second officer Approves (money moves) or Rejects |
 
-- Select **core-banking-db**, set records ~80, click **Run database query**.
-  → green **ALLOWED**, risk stays low. Point to the left window:
-- "On the SOC side, my session just appeared as a live green session."
+### 2.3 Action Console (privileged actions — the detection surface)
 
-Now push it:
+Pick a target system + record count, then: **Run query · Open file · Change config · Escalate privilege · Bulk export**. Every click is scored 0–100 *including the candidate action* and enforced **before it takes effect**:
 
-> "What if I try to pull a lot of data at once?"
+- **0–39 ALLOW** (green) · **40–69 STEP-UP MFA** (amber pop-up, code `246810`) · **70–84 MAKER-CHECKER** (held) · **85+ BLOCK** (full-screen red, account locked)
+- Challenged actions are **not saved until allowed** — you can't game the score by retrying.
 
-- Set records to **1000**, click **Bulk export records**.
-  → a **Step-up MFA** modal appears. "Prahari didn't block me — it wasn't clearly
-  malicious — but it wasn't sure, so it asked me to re-authenticate. That's
-  risk-based access control." Enter **246810** → the action proceeds.
+### 2.4 Credential Vault (PQC checkout — SECURITY → Credential Vault)
 
-### 2:30 — The insider attack (right window)
+Three privileged secrets live **ML-KEM-768-sealed**: core-banking DB root, payment-gateway API key, SWIFT cert passphrase.
 
-Sign out; log in as **`ext_dsouza`** / `prahari123`.
+- **Check out** → the secret unseals for a **5-minute lease** with a live countdown, then vanishes. The checkout is ML-DSA-signed into the audit chain.
+- If your live session risk is **≥ 70 or blocked** → **refusal + CRITICAL SOC alert** — and the refusal itself is recorded evidence.
 
-> "Now the dangerous one. Kevin is a vendor contractor whose contract ended
-> months ago — but his privileged account was never deactivated. It's dormant.
-> Notice the portal itself flags it: he's connecting from an **unregistered
-> laptop on an unknown VPN**, not a bank workstation."
+**The line:** *"PAM, risk scoring, and post-quantum crypto in one click: the vault only opens for a trusted session, and either way it leaves signed evidence."*
 
-Point to the red connection banner, then:
+### 2.5 JIT Access (no standing privilege — SECURITY → JIT Access)
 
-- Select **core-banking-db** (a system he has no business touching — it's under
-  "other systems, outside my role"), click **Escalate privilege**.
-  → **MAKER-CHECKER**: "held for a second approver. Prahari already considers this
-  high-risk — a dormant vendor escalating rights on the core banking DB."
-- Now the theft: records **5000**, click **Bulk export records**.
-  → **full-screen ⛔ ACCESS BLOCKED.** "The session is terminated *mid-export*.
-  He never gets the 5,000 customer records."
-- Try any other action → still blocked. "The account is locked. He can't even
-  log in again to retry."
+1. On the Action Console, click **Escalate privilege** with no grant → the reason panel shows *"Privilege change … outside normal grant process"* (malicious signal, +25).
+2. On **JIT Access**, request elevation for that system with a justification + duration (max 60 min).
+3. The SOC analyst approves it in **JIT & Credentials** → your grant goes **ACTIVE** with a countdown.
+4. Click **Escalate privilege** again → *"privilege change sanctioned by an approved JIT grant"* — no alarm.
+5. The grant **auto-expires**; the rule re-arms by itself.
 
-### 3:00 — The other two insider types (SOC buttons)
+### 2.6 SOC Console (login as `soc_admin`)
 
-The problem statement names three insider types — **malicious, negligent, compromised**.
-The header has a one-click button for each; they drive *different* responses:
+| View | What it shows |
+|---|---|
+| **Overview** | impact metrics strip, live sessions, selected-session gauge, **Analyst Response** (Lock / Approve / Dismiss / **⬇ Evidence pack**), why-flagged, alerts, timeline, session replay |
+| **Live Sessions** | every ACTIVE/BLOCKED privileged session, typed and scored |
+| **Alerts** | severity + insider-type-coded feed, flashes on arrival |
+| **Threat Analysis** | gauge + why-flagged + response actions for the selected session |
+| **AI Model Insights** | feature attribution vs the user's own + peer baselines, risk trajectory sparkline, model card, and **Measured Performance** (the held-out benchmark) |
+| **Session Replay** | the recorded command transcript — blocked commands struck through as DENIED |
+| **Risk Heatmap** | user × day risk grid |
+| **PAM Access Review** | dormant / vendor / expired flags per privileged account |
+| **JIT & Credentials** | JIT approval queue (Approve/Deny) + every credential checkout and refusal |
+| **Audit Chain** | the hash-chained, ML-DSA-signed log with **⛓ Verify** and **✂ Tamper** |
 
-- **☠ Malicious** → the 2 AM dormant-vendor theft you just saw live → **BLOCK**.
-- **🎭 Compromised** → click it: a *normal* sysadmin's account suddenly logs in from
-  Singapore on an unknown laptop and fires six actions in 90 seconds. Prahari reads it
-  as account takeover → **STEP-UP MFA**. The alert is tagged `compromised`.
-- **⚠ Negligent** → click it: an active vendor whose access *expired 18 days ago* keeps
-  pulling reports from a personal laptop. No malice — a control failure → **MAKER-CHECKER**
-  review (Prahari never hard-blocks negligence, it routes it to a human). Tagged `negligent`.
+Header buttons: **☠ Malicious / 🎭 Compromised / ⚠ Negligent** run the three scripted scenarios; **✂ Tamper / ⛓ Verify** drive the quantum-safe evidence moment.
 
-> "Same engine, three different responses, each labelled with *what kind* of insider it is."
-
-### 3:30 — The PAM surface (scroll down, left window)
-
-> "This is privileged-access *management*, not just detection."
-
-- **PAM access review** (bottom panel): every privileged account with standing-risk flags —
-  ext_dsouza is DORMANT + VENDOR + EXPIRED (HIGH), ext_rao is VENDOR + EXPIRED (HIGH). This
-  is the lingering-access problem surfaced before anything even happens.
-- **Session recording** (replay panel): click any session → its full recorded command trail
-  replays like a terminal. On Kevin's blocked session you can see the export line marked
-  **DENIED** and struck through — the action that never completed.
-
-### 3:45 — Watch the malicious case on the SOC side (left window)
-
-> "Everything just lit up here in real time."
-
-- The **live session** for ext_dsouza is now red, score **100**, **BLOCKED**.
-- The **alert** flashed into the feed — CRITICAL, BLOCK.
-- Click his session → the **Why flagged** panel: dormant reactivation, privilege
-  escalation, mass export of 5,000 records, out-of-role access, 100/100
-  behavioural anomaly, 5,000× the data any contractor peer touches.
-- The **timeline** shows exactly what he did, from where.
-- His **heatmap** row is now bright red.
-
-> "Detected, explained, and stopped — in under a second, with a reason a human
-> auditor can read."
-
-### 5:00 — The quantum-safe evidence (left window)
-
-> "A smart insider's next move is to edit the audit log and erase the evidence.
-> And 'harvest-now-decrypt-later' means classical crypto isn't safe for long-lived
-> secrets. So Prahari's evidence layer is post-quantum."
-
-- Click **⛓ Verify Chain** → green: every entry hash-linked, **ML-DSA-65**
-  signatures valid. Credentials sit in an **ML-KEM-768** vault.
-- Click **✂ Tamper Audit Log** → red banner: **verification FAILS**, pointing at
-  the exact entry. "I just rewrote a log record in the database — and it's caught
-  instantly. To hide his tracks he'd have to break a NIST post-quantum signature."
-
-### 6:00 — Close
-
-> "Prahari: staff act through a monitored privileged-access portal; every action
-> is scored live by AI plus rules; the response is graduated — allow, step-up MFA,
-> maker-checker, or block; and the evidence is sealed with NIST post-quantum
-> cryptography. It runs fully offline on SQLite, and it's one connection string
-> from Postgres, feeding from any PAM or SIEM. That's Prahari — the sentinel for
-> privileged access."
+**Analyst response actions** (Overview / Threat Analysis): **⛔ Lock account** (kills the session, next login refused) · **✓ Approve** (releases a held session) · **⊘ Dismiss** (marks a false positive) · **⬇ Evidence pack** (downloads the ML-DSA-signed incident report JSON). Every decision is sealed to the audit chain with a toast confirming it.
 
 ---
 
-## Judge Q&A quick answers
+## 3 · The judge demo — 8 minutes, six outcomes in order
 
-- **Is the blocking real?** Yes — the portal action API refuses to execute the
-  action and freezes the session server-side. A blocked account cannot re-open a
-  session.
-- **How does scoring work live?** Each action re-scores the whole session so far:
-  rule engine (weighted known-bad patterns) + IsolationForest behavioural anomaly
-  + peer comparison, combined into 0–100. Held/challenged actions aren't persisted
-  until allowed, so re-tries don't inflate the score.
-- **Real data sources?** Any PAM/SIEM (CyberArk, Splunk) maps to the same Event
-  schema; the portal + simulator are the demo feed.
-- **Auth?** Passwords are PBKDF2-HMAC-SHA256; sessions are HMAC-signed tokens.
-  Demo-grade, dependency-free; a real deployment swaps in the bank's IdP/SSO.
-- **PQC performance?** ML-KEM encap + ML-DSA sign are sub-millisecond.
-- **Scale?** Stateless scoring service; Postgres + a broker for fan-out; model
-  retrains per role nightly.
+Setup: SOC Console on the big screen (`soc_admin`), employee machine ready. Say the bold lines.
 
-## Fallback recording checklist (record before the event)
+### 0:00 — Open on the SOC (30s)
 
-Screen-record one clean run (OBS / Win+Alt+R), ~4 minutes, two windows visible:
+Quiet console, green heatmap, impact-metrics strip, green LIVE dot.
+**"This is Prahari — the sentinel between privileged staff and a bank's core systems. Right now: normal day, every session watched, audit chain quantum-sealed."**
 
-1. SOC console idle (green heatmap) + employee normal query → ALLOWED
-2. Employee export 1000 → MFA modal → proceed
-3. Log in as ext_dsouza → escalate (maker-checker) → export 5000 → BLOCKED overlay
-4. SOC: red live session, flashed alert, why-panel, red heatmap cell
-5. Verify Chain (green) → Tamper (red FAILED)
+### 0:30 — Risk-based authentication (45s) · *Outcome: risk-based auth*
 
-Store it on the laptop **and** a phone.
+On the employee machine, sign in as `ext_dsouza`. The amber challenge appears listing the three reasons.
+**"A dormant vendor account just woke up — a password alone doesn't get in. Risk-based authentication challenges it at the door."** Enter `246810`: **"Our attacker has phished the OTP — watch what happens to him inside."** *(Leave him logged in — he's Act 4.)*
 
-## Reset between runs
+### 1:15 — Real banking + a normal employee (90s) · *Outcome: detect misuse / protect systems*
 
-```powershell
-# Ctrl+C the server, then:
-.\run.ps1 -Reset
-```
+Second employee window: `rmehta` (straight in — trusted). Show the **banking desk**: transfer ₹50,000 → **CLEARED**. Transfer ₹5,00,000 → **HELD for maker-checker**. Pay "QuickCash Holdings ⚠" → red **FRAUD flash** + point at the SOC screen: the CRITICAL alert just landed.
+**"This is a real banking floor. Big money needs two officers; a watch-listed payee stops the money and alerts the SOC in the same second."**
+
+On the Action Console: export **1,200 records** → **STEP-UP MFA** pop-up → enter code → allowed.
+**"Unusual volume: the response is proportionate — verify, not block."**
+
+### 2:45 — JIT + the quantum vault (75s) · *Outcome: PAM / protect systems*
+
+As `rmehta`: click **Escalate privilege** → alarmed. Request a **JIT grant** ("schema migration, 15 min"), approve it on the SOC (**JIT & Credentials** — the badge is already lit). Escalate again → **sanctioned**.
+**"No standing privilege: elevation is approved, time-boxed, auto-expiring — and the engine stands down for exactly that grant, then re-arms."**
+
+Open **Credential Vault** → check out the core-banking root password → the secret appears with a 5-minute countdown.
+**"Secrets live sealed under ML-KEM-768 — quantum-safe. The vault opens only for a trusted session, for five minutes, with a signed receipt."**
+
+### 4:00 — The attack (75s) · *Outcomes: real-time detection + response*
+
+Back to `ext_dsouza`: escalate privilege → held. Then **bulk export 5,000 records** → **full-screen red BLOCK**, account locked. The SOC screen lights up by itself: red session at 100, flashing CRITICAL alert typed **MALICIOUS**, replay shows the export **struck through — DENIED**.
+Try the vault as the attacker → **checkout refused**. Log him out and back in → **still locked**.
+**"Caught mid-action, before the data left. The block is server-side, the account stays dead, and even the vault refuses him — and every refusal is evidence."**
+
+### 5:15 — Three insider types + explainable AI (75s) · *Outcome: AI behavioural analysis*
+
+SOC buttons: **🎭 Compromised** → STEP-UP MFA (Singapore + new device + inhuman pace). **⚠ Negligent** → MAKER-CHECKER (expired vendor, personal laptop — *"we never auto-block a careless employee; a human reviews"*).
+Open **AI Model Insights**: feature bars vs personal + peer baselines, the risk trajectory climbing, and **Measured Performance**:
+**"We didn't just build AI, we measured it: on a held-out month — 230 benign sessions — 100% of attacks detected with the correct response and type, zero false blocks, 1.7% false alarms."**
+
+### 6:30 — Quantum-safe evidence + closed loop (60s) · *Outcome: QPC*
+
+**⛓ Verify** → green, every signature valid. **✂ Tamper** → the chain fails **at the exact entry**, banner turns red.
+**"An insider who edits the evidence would need to forge a NIST post-quantum signature."**
+Click **⬇ Evidence pack** on the blocked session: **"One click — replay, trajectory, model reasoning, audit extract — sealed with an ML-DSA-65 signature. This is what compliance hands to the RBI."**
+Finally **⛔ Lock account** on any remaining flagged session — the toast confirms it's sealed to the chain.
+
+### 7:30 — Close (30s)
+
+**"Six outcomes, all live: detection, real time, measured AI, risk-based control from login to logout, protected admin systems with JIT and a quantum vault, and evidence that can't be silently edited. Prahari runs offline, on any laptop, with 54 passing tests — and everything you saw was two computers talking over this Wi-Fi."**
+
+---
+
+## 4 · Judge Q&A — quick answers
+
+- **"Real AI or rules?"** Both, fused: IsolationForest (scikit-learn) trained on behavioural history + per-user baselines contributes up to 25 points; the explainable rule engine sets the band. Feature attribution is on the Model Insights page.
+- **"How do you know it works?"** Held-out benchmark, independent seed: 100% detection / correct typing / correct response on the three attack patterns, 0 false blocks on 230 benign sessions, 1.7% false-alarm rate. Plus 54 pytest tests.
+- **"False positives?"** A challenge is cheap (10-second MFA), a block is rare (0 on benign). Negligence is floored to human review — never auto-blocked.
+- **"Why is negligent not blocked?"** Type-aware policy: a careless employee is a control failure to *remediate* (maker-checker), not an attack. Enforced in `decide()` and tested.
+- **"What's quantum-proof exactly?"** FIPS 203 ML-KEM-768 seals the credential vault (the AES key *is* the KEM shared secret — defeats harvest-now-decrypt-later). FIPS 204 ML-DSA-65 signs every audit entry and incident report over a hash chain.
+- **"What if liboqs won't install?"** Pure-Python fallback (kyber-py / dilithium-py) auto-selected; same algorithms, same tests pass. `GET /pqc/info` shows the active provider.
+- **"How does this scale?"** Stateless scoring behind a load balancer; SQLite→PostgreSQL is one connection string; WebSocket fans out via Redis/Kafka; the same Event schema ingests PAM/SIEM feeds (CyberArk, Splunk).
+- **"Production auth?"** Demo IdP by design — PBKDF2 + signed tokens behind one dependency; a bank swaps in SSO/AD without touching the engine.
+- **"Can the employee bypass the browser?"** No — enforcement is server-side; the API refuses. Blocked stays blocked across logins; challenged actions aren't persisted (no score-gaming).
+- **"GDPR / PII?"** Scores activity metadata only; no customer PII needed.
+
+---
+
+## 5 · Numbers to quote
+
+| Number | Meaning |
+|---|---|
+| **54** | automated tests, all passing |
+| **11** | detection rules across the 3 insider types |
+| **0–100 / <1s** | risk score per action, scored before it executes |
+| **100% / 0 / 1.7%** | detection rate / false blocks / false alarms on the held-out benchmark |
+| **25 pts max** | UEBA's capped contribution (AI refines, rules stay explainable) |
+| **₹2L / ₹10L** | maker-checker threshold / auto-fraud threshold |
+| **5 min / 60 min** | credential-checkout lease / max JIT grant |
+| **ML-KEM-768 + ML-DSA-65** | FIPS 203/204 — vault + signed audit chain |
+| **2 computers** | live over LAN, offline, no refresh |
+
+---
+
+## 6 · Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Audit chain shows FAILED at start | you demoed Tamper earlier — `.\run.ps1 -Reset` |
+| Attacker account already blocked | previous run — `.\run.ps1 -Reset` |
+| Computer 2 can't reach the server | firewall: allow TCP 8000 on Computer 1 (command in §1) |
+| "LIVE" dot red / reconnecting | it auto-reconnects with backoff; a polling fallback keeps data fresh anyway |
+| liboqs error on a teammate's laptop | none needed — the pure-Python fallback loads automatically; force it with `PRAHARI_PQC=pure` |
+| MFA pop-up rejects the code | the demo code is exactly `246810` |
+| Evening demo flags after-hours | it won't — the demo business-clock anchors live actions to business hours |
+
+**Reset between runs:** Ctrl+C the server → `.\run.ps1 -Reset`.
+
+**Fallback:** screen-record one clean run (~5 min, both windows visible) the night before: risky login challenge → banking (clear/held/fraud flash) → JIT sanctioned escalation → vault checkout → attack blocked → Model Insights + Measured Performance → Verify/Tamper → Evidence pack. Store it on the laptop **and** a phone.

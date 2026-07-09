@@ -83,35 +83,44 @@ def architecture():
 
 # ---------------------------------------------------------------- data model
 def datamodel():
-    fig, ax = canvas(12, 8.4)
-    pitch, head = 4.0, 5.5
+    fig, ax = canvas(12, 10.6)
+    pitch, head = 3.7, 5.2
     def ent(x, y, title, fields, w=27):
         h = head + len(fields) * pitch
         box(ax, x, y - h, w, h, "", LIGHT, ec=TEAL, rad=1.2)
-        ax.text(x + w / 2, y - 3.6, title, ha="center", va="center", color=TEAL, fontsize=10, fontweight="bold")
+        ax.text(x + w / 2, y - 3.4, title, ha="center", va="center", color=TEAL, fontsize=10, fontweight="bold")
         for i, f in enumerate(fields):
-            ax.text(x + 2, y - 7.8 - i * pitch, f, ha="left", va="center", color=INK, fontsize=7.6)
+            ax.text(x + 2, y - 7.3 - i * pitch, f, ha="left", va="center", color=INK, fontsize=7.6)
         return h
-    # top row
-    ent(3, 97, "USER", ["username, role", "account_type", "is_dormant, is_vendor", "access_expires_at", "password_hash"])
-    ent(37, 97, "SESSION", ["user_id", "status ACTIVE/CLOSED/BLOCKED", "risk_score, risk_reasons", "source_ip, geo, device", "started/ended_at"])
-    ent(71, 97, "EVENT", ["session_id", "action_type", "resource, records", "ip, geo, device", "timestamp"])
-    # middle row
-    ent(3, 60, "AUDITLOGENTRY", ["actor, action, payload", "prev_hash", "entry_hash", "signature (ML-DSA-65)"])
-    ent(37, 60, "SESSIONCOMMAND", ["session_id", "command (transcript)", "action_type, resource", "outcome EXECUTED/DENIED/HELD"])
-    ent(71, 60, "ALERT", ["session_id", "severity", "action_taken", "insider_type", "message"])
-    # bottom row — vault + the two core-banking tables
-    ent(3, 31, "VAULTITEM", ["name", "ciphertext (AES-256-GCM)", "nonce", "kem_ciphertext (ML-KEM)"])
-    ent(37, 31, "BANKACCOUNT", ["number, holder", "acc_type, branch", "balance", "status ACTIVE/DORMANT/FROZEN"])
-    ent(71, 31, "BANKTRANSACTION", ["from_number, to_number", "amount, mode", "status CLEARED/HELD/FLAGGED", "maker, flagged_reason"])
+    r1, r2, r3, r4 = 99, 75, 51, 27
+    # row 1 — the activity spine
+    ent(3, r1, "USER", ["username, role", "account_type", "is_dormant, is_vendor", "access_expires_at"])
+    ent(37, r1, "SESSION", ["user_id, status", "risk_score, risk_reasons", "source_ip, geo, device", "started/ended_at"])
+    ent(71, r1, "EVENT", ["session_id", "action_type", "resource, records", "ip, device, timestamp"])
+    # row 2 — detection output + evidence
+    ent(3, r2, "AUDITLOGENTRY", ["actor, action, payload", "prev_hash", "entry_hash", "signature (ML-DSA-65)"])
+    ent(37, r2, "SESSIONCOMMAND", ["session_id", "command (transcript)", "action_type, resource", "outcome EXEC/DENIED/HELD"])
+    ent(71, r2, "ALERT", ["session_id, severity", "action_taken", "insider_type", "message"])
+    # row 3 — vault + core banking
+    ent(3, r3, "VAULTITEM", ["name", "ciphertext (AES-256-GCM)", "nonce", "kem_ciphertext (ML-KEM)"])
+    ent(37, r3, "BANKACCOUNT", ["number, holder", "acc_type, branch", "balance", "status ACTIVE/FROZEN"])
+    ent(71, r3, "BANKTRANSACTION", ["from_number, to_number", "amount, mode", "status CLEARED/HELD/FLAGGED", "maker, flagged_reason"])
+    # row 4 — PAM workflows (just-in-time access + credential checkout)
+    ent(3, r4, "JITGRANT", ["user_id, privilege", "justification, duration", "status PENDING/ACTIVE/EXPIRED", "approved_by, expires_at"])
+    ent(37, r4, "CREDENTIALCHECKOUT", ["name (vault item), user_id", "checked_out_at, expires_at", "status ACTIVE/EXPIRED/DENIED", "risk_at_checkout"])
+    box(ax, 71, r4 - 20, 27, 20,
+        "PAM workflows\nJIT grants sanction escalation\nfor one resource, time-boxed.\nCheckouts lease a sealed secret\n— refusals are evidence too.",
+        BANNER, tc="white", fs=7.6)
     # relationships
-    arrow(ax, 30, 91, 37, 91, GREY); arrow(ax, 64, 91, 71, 91, GREY)
-    arrow(ax, 50, 74, 50, 60, GREY)          # SESSION -> SESSIONCOMMAND
-    arrow(ax, 62, 82, 80, 60, GREY)          # SESSION -> ALERT
-    arrow(ax, 64, 25, 71, 25, GREY)          # BANKACCOUNT -> BANKTRANSACTION
-    ax.text(50, 3, "Privileged-access side: USER → SESSION → EVENT (+ recorded commands, alerts, audit, vault).  "
-            "Core-banking side: BANKACCOUNT → BANKTRANSACTION.",
-            ha="center", color=GREY, fontsize=8.0, style="italic")
+    arrow(ax, 30, 93, 37, 93, GREY); arrow(ax, 64, 93, 71, 93, GREY)   # USER -> SESSION -> EVENT
+    arrow(ax, 50, 79, 50, 75, GREY)                                    # SESSION -> SESSIONCOMMAND
+    arrow(ax, 62, 86, 80, 75, GREY)                                    # SESSION -> ALERT
+    arrow(ax, 64, 45, 71, 45, GREY)                                    # BANKACCOUNT -> BANKTRANSACTION
+    arrow(ax, 16, 31, 16, 27, GREY)                                    # VAULTITEM -> ... row4 (checkout leases a vault item)
+    arrow(ax, 30, 21, 37, 21, GREY)                                    # JITGRANT | CREDENTIALCHECKOUT (workflow pair)
+    ax.text(50, 2, "Privileged access: USER → SESSION → EVENT (+ recording, alerts, signed audit).  "
+            "Core banking: BANKACCOUNT → BANKTRANSACTION.  PAM workflows: JITGRANT + CREDENTIALCHECKOUT.",
+            ha="center", color=GREY, fontsize=7.6, style="italic")
     save(fig, "datamodel.png")
 
 

@@ -14,6 +14,8 @@ date: "Repository: github.com/positromen/FinSpark-26-Trial"
 - **Responds** adaptively — **ALLOW / STEP-UP MFA / MAKER-CHECKER / BLOCK** — tagged with the detected **insider type**.
 - **Protects** its own credentials and audit log with **NIST post-quantum cryptography** (ML-KEM-768 vault and ML-DSA-65 signed hash-chain).
 
+Risk-based control runs **from the front door to the last artefact**: a risky account must pass **step-up MFA at login**; privilege elevation needs an approved, auto-expiring **just-in-time (JIT) grant**; privileged secrets are released only through a **time-boxed, risk-gated credential checkout** from the quantum-safe vault; and every incident can be exported as an **ML-DSA-signed evidence pack**. The detector is **measured, not just claimed**: on a held-out benchmark it detects 100% of the scripted attacks with the correct response and type, with zero false blocks on benign sessions.
+
 It ships as a real two-sided product: an **Employee Portal** — a working core-banking desk (accounts, payments, transactions, approvals) where staff act and both fraud controls and insider enforcement happen live — and a **SOC Console** where analysts watch, replay sessions, review access, lock or clear a session, and verify the audit chain. It runs **fully offline** on SQLite and is one connection string away from PostgreSQL. The post-quantum layer needs **no compiler**: it auto-selects a native library when present and falls back to a pure-Python implementation otherwise, so any teammate can launch it.
 
 **All six judged outcomes are delivered:** detect misuse of privileged accounts; identify insider threats in real time; AI-driven behavioural analysis; risk-based access control; protect critical administrative systems; and quantum-proof cryptography for credentials and audit artefacts.
@@ -61,15 +63,15 @@ The Employee Portal, and in production any PAM/SIEM feed, map onto the same norm
 | Real-time | FastAPI WebSocket |
 | Frontend | React 19 + Vite + Tailwind 4 (+ Recharts) |
 | Packaging | Docker + docker-compose · run.ps1 / run.sh |
-| Testing | pytest (40 tests) |
+| Testing | pytest (54 tests) |
 
 # Data Model
 
-Nine ORM entities capture the workforce, their recorded sessions and actions, the detection output, the post-quantum artefacts, and the core-banking ledger.
+Eleven ORM entities capture the workforce, their recorded sessions and actions, the detection output, the post-quantum artefacts, the core-banking ledger, and the PAM workflows.
 
-![Entity model — users, sessions, events, recorded commands, alerts, audit entries, vault items, and the bank accounts and transactions.](img/datamodel.png){width=100%}
+![Entity model — the activity spine, detection output, quantum-safe evidence, core-banking ledger, and the JIT-grant and credential-checkout workflows.](img/datamodel.png){width=100%}
 
-`BankAccount` and `BankTransaction` are the **core-banking ledger** that the Employee Portal reads and writes (see *Core Banking Operations*); `SessionCommand` is the **privileged-session recording**: every action writes a realistic command line (for example, `psql core-banking-db -c "COPY customers TO '/tmp/out.csv' CSV;" -- 5000 rows`) with an outcome, so a session replays like a terminal transcript.
+`JitGrant` and `CredentialCheckout` are the **PAM workflows** (just-in-time elevation and vault checkout — see below); `BankAccount` and `BankTransaction` are the **core-banking ledger** that the Employee Portal reads and writes (see *Core Banking Operations*); `SessionCommand` is the **privileged-session recording**: every action writes a realistic command line (for example, `psql core-banking-db -c "COPY customers TO '/tmp/out.csv' CSV;" -- 5000 rows`) with an outcome, so a session replays like a terminal transcript.
 
 **Seeded cast** (all password `prahari123`):
 
@@ -107,6 +109,8 @@ Each rule returns a **reason**, a **weight**, and an **insider_type** tag.
 
 The **dominant insider type** of a session is the category carrying the most rule weight (tie-break priority: malicious, then compromised, then negligent).
 
+**JIT-aware escalation.** A privilege change covered by an **ACTIVE just-in-time grant** (approved by an analyst, time-boxed, auto-expiring) is *sanctioned*: PRIVILEGE_ESCALATION does not fire for that one resource, and the reason list says so. The moment the grant expires, the rule re-arms — so the same click is an alarm again.
+
 **Device disambiguation.** A new device *with* a foreign geography reads as account takeover (`NEW_DEVICE`, compromised); a new device from the *home* location reads as a personal, unmanaged laptop (`UNMANAGED_DEVICE`, negligent). This keeps the two families cleanly separated.
 
 ## UEBA — behavioural analytics
@@ -124,6 +128,18 @@ The final score fuses the two detectors:
 $$\text{score} = \min\!\big(\; \text{rule\_weight (capped at 80)} \;+\; 0.25 \times \text{UEBA\_anomaly} \;+\; \text{peer\_bonus (10 if} \geq 5\times \text{peers)}, \; 100 \big)$$
 
 UEBA is a **secondary nudge** (at most 25 points): the stable, explainable rule engine sets the band; the behavioural model refines within it. Every score ships a reason list (the "why-flagged" panel) and the insider type.
+
+## Measured performance
+
+The detector is benchmarked on a **held-out sandbox** (30 days of simulated benign privileged activity on an independent seed, plus the three scripted attack patterns — ground truth exact by construction, nothing touches the live database):
+
+| Metric | Result |
+|---|---|
+| Attack detection rate | **100%** (3/3, each with the correct response *and* insider type) |
+| False blocks on benign sessions | **0** of 230 |
+| False-alarm rate (any challenge/hold) | **1.7%** |
+
+The numbers are live in the SOC (*AI Model Insights -> Measured Performance*) and via `GET /soc/model/eval`; the benchmark itself is a regression test in the suite.
 
 ![Scoring pipeline — rules and UEBA fuse into a 0–100 score that maps onto the response ladder.](img/scoring.png){width=100%}
 
@@ -160,6 +176,22 @@ Key safety properties:
 - **Privileged-session recording** (`GET /soc/sessions/{id}/commands`) — the replayable command trail; blocked commands show as DENIED (struck through), held ones as HELD.
 - **Access review** (`GET /soc/access-review`) — every privileged account with standing-risk flags (DORMANT / VENDOR / EXPIRED) and a risk rating, surfacing lingering access *before* anything happens.
 - **Maker-checker approval** (`POST /soc/sessions/{id}/approve`) — an analyst approves a held session; the approval is written to the signed audit log.
+
+## Just-in-time (JIT) access — no standing privilege
+
+Privilege elevation is a **workflow, not a right**: an employee requests elevation for **one resource** with a business justification and a duration (max 60 minutes); an SOC analyst approves or denies it from the **JIT & Credentials** queue; an approved grant is **time-boxed and auto-expires**. While ACTIVE, the grant *sanctions* escalation on exactly that resource (see the rule engine above); on expiry the engine re-arms automatically. Every request, decision, and expiry is sealed to the signed audit log.
+
+## Credential checkout — the vault as a workflow
+
+Privileged secrets (database root, payment-gateway key, SWIFT passphrase) live **ML-KEM-768-sealed** in the vault and are released only through a checkout: a **5-minute lease** with a live countdown, signed into the audit chain. The same risk score that drives session enforcement gates the vault — a session at **risk >= 70 or blocked is refused**, the refusal raises a CRITICAL SOC alert, **and the refusal itself is recorded as evidence**. The SOC sees every checkout and denial (`GET /soc/checkouts`).
+
+## Risk-based authentication (adaptive login)
+
+A correct password is not enough for a risky account. At login, Prahari checks the same context signals the detection engine scores — **dormant account, expired access grant, unrecognized network/device** — and any hit demands the **step-up MFA code before a token is issued**. Challenges, failures (which also alert the SOC), and verifications are all written to the signed audit chain.
+
+## Signed incident reports
+
+`GET /soc/sessions/{id}/report` (the SOC's **Evidence pack** button) exports a self-contained incident document — session facts, recorded command transcript, per-action risk trajectory, model insights, alerts, audit extract, and chain status — whose canonical JSON is **hashed and ML-DSA-65-signed**, so the exported file is itself verifiable evidence a bank can hand to compliance.
 
 ## Analyst response actions
 
@@ -212,6 +244,7 @@ Each entry hash-chains the previous entry **and** is ML-DSA-65 signed. Editing a
 # Authentication and Authorization
 
 - **Passwords** — PBKDF2-HMAC-SHA256 (200,000 rounds, per-user salt), in `app/security/auth.py`.
+- **Risk-based login** — dormant / expired / unrecognized-context accounts must pass step-up MFA at the door before any token is issued (audit-chained; failures alert the SOC).
 - **Tokens** — compact HMAC-SHA256-signed, JWT-like tokens with expiry, verified on every request.
 - **Roles** — `EMPLOYEE` routes to the Employee Portal; `ANALYST` routes to the SOC Console. SOC endpoints are gated with `require_analyst` (HTTP 403 for employees). The WebSocket feed is broadcast-only.
 
@@ -221,7 +254,7 @@ This layer is demo-grade by design; a production deployment swaps in the bank's 
 
 | Method | Endpoint | Auth | Purpose |
 |---|---|---|---|
-| POST | /auth/login | – | issue token (username / password) |
+| POST | /auth/login | – | issue token; risky accounts get an MFA challenge first |
 | GET | /auth/me | any | current identity |
 | POST | /portal/bootstrap | employee | open live session + catalog + resources |
 | POST | /portal/action | employee | perform action -> scored and enforced |
@@ -237,7 +270,16 @@ This layer is demo-grade by design; a production deployment swaps in the bank's 
 | POST | /soc/sessions/{id}/dismiss | analyst | mark a flag reviewed (false-positive) |
 | GET | /soc/sessions/{id}/model | analyst | UEBA feature breakdown (explainable) |
 | GET | /soc/sessions/{id}/trajectory | analyst | per-action score trajectory |
+| GET | /soc/sessions/{id}/report | analyst | ML-DSA-signed incident evidence pack |
+| GET | /soc/model/eval | analyst | measured detector performance (held-out benchmark) |
 | GET | /soc/metrics | analyst | live impact metrics strip |
+| GET | /soc/jit | analyst | JIT approval queue |
+| POST | /soc/jit/{id}/approve, /deny | analyst | decide a JIT elevation request |
+| GET | /soc/checkouts | analyst | every credential checkout and refusal |
+| POST | /jit/request | employee | request time-boxed elevation (justified) |
+| GET | /jit/mine | employee | my JIT grants with live status/expiry |
+| GET | /vault/credentials | employee | the credential desk + my checkout history |
+| POST | /vault/checkout | employee | risk-gated, time-boxed secret checkout |
 | GET | /bank/accounts, /transactions | employee | account list / ledger |
 | GET | /bank/pending, /beneficiaries | employee | held queue / payees |
 | POST | /bank/transfer | employee | submit a transfer -> fraud + risk gated |
@@ -301,7 +343,7 @@ Then open `http://127.0.0.1:8000`. The first run on a fresh machine needs intern
 
 # Testing
 
-The suite contains **40 pytest tests**, including:
+The suite contains **54 pytest tests**, including:
 
 - **test_simulator** — user seeding, normal-day realism, determinism.
 - **test_detection** — every rule, normal-versus-attack scoring, quiet-on-normal.
@@ -310,23 +352,26 @@ The suite contains **40 pytest tests**, including:
 - **test_portal** — authentication, role gating, live enforcement, MFA without event stacking, and blocked-stays-locked.
 - **test_pqc** — KEM round-trip, sign/verify with forgery rejection, vault round-trip, and audit chain clean / tamper / signature-forgery (run against both PQC providers).
 - **test_bank** — transfers move money, high-value holds, watchlist / huge-amount / high-risk-session transfers flag, held transfers settle on approval, and insufficient-funds / frozen-account transfers are refused.
+- **test_pam_plus** — risk-based login (challenge / wrong-code alert / verified token), credential checkout (lease, high-risk refusal recorded as evidence, expiry, SOC oversight), the full JIT lifecycle (request -> approve -> sanctioned escalation -> auto-expiry -> re-armed rule), the measured-performance benchmark, and the signed incident report (signature verifies; tampered report fails).
 
 # Demo Walkthrough
 
 Full narration is in `DEMO_SCRIPT.md`. In brief (two browser windows, side by side):
 
-1. **SOC Console** (`soc_admin`) — quiet, with a green heatmap.
-2. **Employee Portal** (`rmehta`) — a normal query is ALLOWED; an export of 1000 records triggers STEP-UP MFA (code `246810`). On the **banking desk**, a small transfer clears instantly, a high-value one is **HELD** for maker-checker, and a transfer to a watchlisted payee is **FLAGGED** and flashes a banner — surfacing as a CRITICAL alert in the SOC.
-3. **Attacker** (`ext_dsouza`) — escalate then export 5000 records -> full-screen BLOCK; the account is locked.
-4. **SOC lights up** — a red live session at 100, a flashed CRITICAL alert tagged `malicious`, the why-flagged panel, the session replay (export struck through as DENIED), and a red heatmap cell.
-5. **Two more insider types** — the SOC buttons run Compromised -> MFA and Negligent -> maker-checker, each correctly typed.
-6. **PAM access review** — dormant, vendor and expired flags.
-7. **Quantum-safe evidence** — Verify Chain (green) then Tamper (red, FAILED at the exact entry).
+1. **SOC Console** (`soc_admin`) — quiet, with a green heatmap and the impact-metrics strip.
+2. **Risk-based login** — signing in as `ext_dsouza` triggers the step-up challenge at the door (dormant, expired, unrecognized context); code `246810` gets the "attacker" in.
+3. **Employee Portal** (`rmehta`) — a normal query is ALLOWED; an export of 1200 records triggers STEP-UP MFA. On the **banking desk**, a small transfer clears instantly, a high-value one is **HELD** for maker-checker, and a transfer to a watchlisted payee is **FLAGGED** and flashes a banner — surfacing as a CRITICAL alert in the SOC.
+4. **JIT + vault** — an unsanctioned escalation alarms; after an analyst approves a JIT grant it is sanctioned; a credential checkout unseals a secret for a 5-minute lease.
+5. **Attacker** (`ext_dsouza`) — escalate then export 5000 records -> full-screen BLOCK; the account is locked; the vault refuses him.
+6. **SOC lights up** — a red live session at 100, a flashed CRITICAL alert tagged `malicious`, the why-flagged panel, the session replay (export struck through as DENIED), and a red heatmap cell.
+7. **Two more insider types** — the SOC buttons run Compromised -> MFA and Negligent -> maker-checker, each correctly typed.
+8. **Explainable + measured AI** — the Model Insights panel (feature attribution, trajectory) and the held-out benchmark numbers.
+9. **Quantum-safe evidence** — Verify Chain (green), Tamper (red, FAILED at the exact entry), then export the **signed evidence pack** for the blocked session.
 
 # Roadmap
 
-- **PS2 correlation** — link a privileged record-change to a suspicious downstream transaction.
-- **Just-in-time access** and automated entitlement reviews.
+- **PS2 correlation** — link a privileged record-change to a suspicious downstream transaction (the session-risk gate on transfers is the first step, already live).
+- **Automated entitlement reviews** and credential auto-rotation on lease return.
 - **Autoencoder** UEBA upgrade behind the same interface.
 - **Enterprise integrations** — CyberArk / BeyondTrust PAM, Splunk / QRadar SIEM, IdP / SSO.
 - **Workforce-wide insider-risk scoring** beyond privileged accounts.
@@ -339,11 +384,13 @@ PRAHARI/
     main.py               FastAPI app + lifespan + static UI mount
     config.py             pydantic settings (.env)
     bank.py               core-banking engine (transfers, maker-checker, fraud)
+    jit.py                just-in-time access (request/approve/expire)
     pam.py                session-command recording + access review
     api/routes.py         REST + WebSocket endpoints
     api/ws.py             WebSocket broadcast manager
     detection/rules.py    rule engine (3 insider types, typed)
     detection/ueba.py     IsolationForest + peer baseline (prefix-trained)
+    detection/evaluate.py held-out benchmark (measured performance)
     detection/score.py    0-100 risk score + reasons + insider type
     detection/response.py type-aware adaptive response
     detection/live.py     live per-action scoring & enforcement
@@ -354,7 +401,7 @@ PRAHARI/
     security/audit.py     hash-chained + signed audit log
     simulator/            normal-day generator, 3 scenarios, seeder
   frontend/               React app (pages/ + components/) + prebuilt dist/
-  tests/                  40 pytest tests
+  tests/                  54 pytest tests
   docs/                   this documentation + submission deck
   DOCUMENTATION.md  DEMO_SCRIPT.md  PROJECT_STATUS.md  README.md
   run.ps1  run.sh  Dockerfile  docker-compose.yml  requirements.txt

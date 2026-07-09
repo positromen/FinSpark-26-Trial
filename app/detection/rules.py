@@ -34,9 +34,16 @@ def _acts(events: list[Event]) -> list[Event]:
     return [e for e in events if e.action_type not in ("LOGIN", "LOGOUT")]
 
 
-def evaluate(user: User, events: list[Event], now: datetime | None = None) -> list[RuleHit]:
-    """Run all rules over one session's events; return every hit."""
+def evaluate(user: User, events: list[Event], now: datetime | None = None,
+             jit_privileges: set[str] | None = None) -> list[RuleHit]:
+    """Run all rules over one session's events; return every hit.
+
+    `jit_privileges` are resources the user holds an ACTIVE just-in-time grant
+    for: a privilege change covered by an approved, unexpired grant is
+    sanctioned and does not fire PRIVILEGE_ESCALATION.
+    """
     now = now or datetime.now()
+    jit_privileges = jit_privileges or set()
     hits: list[RuleHit] = []
     logins = [e for e in events if e.action_type == "LOGIN"]
 
@@ -46,7 +53,8 @@ def evaluate(user: User, events: list[Event], now: datetime | None = None) -> li
             f"Dormant {'vendor ' if user.is_vendor else ''}account '{user.username}' became active",
             30, MALICIOUS))
 
-    priv = [e for e in events if e.action_type == "PRIV_CHANGE"]
+    priv = [e for e in events if e.action_type == "PRIV_CHANGE"
+            and e.resource not in jit_privileges]
     if priv:
         hits.append(RuleHit("PRIVILEGE_ESCALATION",
             f"Privilege change on {priv[0].resource} outside normal grant process", 25, MALICIOUS))

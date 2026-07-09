@@ -15,13 +15,19 @@ const PW = 'prahari123'
 export default function Login({ onLogin }) {
   const [u, setU] = useState('')
   const [p, setP] = useState(PW)
-  const [err, setErr] = useState(false)
+  const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [challenge, setChallenge] = useState(null) // { factors: [...] } when step-up is demanded
+  const [code, setCode] = useState('')
 
-  const submit = async () => {
-    setBusy(true); setErr(false)
-    try { onLogin(await login(u.trim(), p)) }
-    catch { setErr(true) }
+  const submit = async (mfaCode) => {
+    setBusy(true); setErr('')
+    try {
+      const res = await login(u.trim(), p, mfaCode)
+      if (res.mfaRequired) { setChallenge(res); setCode(''); return }
+      onLogin(res)
+    }
+    catch (e) { setErr(String(e.message || 'Sign-in failed')) }
     finally { setBusy(false) }
   }
 
@@ -37,6 +43,7 @@ export default function Login({ onLogin }) {
               <div style={{ fontSize: 12.5, color: C.muted, letterSpacing: .5 }}>Privileged-Access Insider-Threat Detection</div>
             </div>
 
+            {!challenge ? (
             <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 26 }}>
               <label className="field">Username
                 <input className="input mono" value={u} autoComplete="off"
@@ -48,11 +55,38 @@ export default function Login({ onLogin }) {
                        onChange={(e) => setP(e.target.value)}
                        onKeyDown={(e) => e.key === 'Enter' && submit()} />
               </label>
-              <button className="btn btn-navy" style={{ marginTop: 4 }} disabled={busy} onClick={submit}>
+              <button className="btn btn-navy" style={{ marginTop: 4 }} disabled={busy} onClick={() => submit()}>
                 {busy ? 'Signing in…' : 'Sign in'}
               </button>
-              {err && <div style={{ fontSize: 12, color: C.critical, fontWeight: 600 }}>▲ Unknown user or password — pick a demo account below.</div>}
+              {err && <div style={{ fontSize: 12, color: C.critical, fontWeight: 600 }}>▲ {err}</div>}
             </div>
+            ) : (
+            <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 26,
+                                                    borderTop: `3px solid ${C.warn}` }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: C.warnInk }}>
+                🛡 Risk-based authentication — step-up verification required
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
+                A correct password is not enough for this account. Prahari flagged the sign-in context:
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: C.ink2, lineHeight: 1.7 }}>
+                {challenge.factors.map((f, i) => <li key={i}>{f}</li>)}
+              </ul>
+              <label className="field">One-time verification code
+                <input className="input mono" value={code} autoFocus placeholder="6-digit code"
+                       onChange={(e) => setCode(e.target.value)}
+                       onKeyDown={(e) => e.key === 'Enter' && submit(code)} />
+              </label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-navy" style={{ flex: 1 }} disabled={busy || !code}
+                        onClick={() => submit(code)}>
+                  {busy ? 'Verifying…' : 'Verify & sign in'}
+                </button>
+                <button className="btn" onClick={() => { setChallenge(null); setErr(''); setCode('') }}>Cancel</button>
+              </div>
+              {err && <div style={{ fontSize: 12, color: C.critical, fontWeight: 600 }}>▲ {err}</div>}
+            </div>
+            )}
 
             <div className="card" style={{ marginTop: 14, padding: '14px 16px' }}>
               <div className="label" style={{ marginBottom: 8 }}>DEMO ACCOUNTS · CLICK TO FILL · PW {PW}</div>

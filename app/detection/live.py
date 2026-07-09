@@ -12,6 +12,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session as OrmSession
 
+from app import jit
 from app.config import settings
 from app.detection.response import decide
 from app.detection.score import assess
@@ -109,7 +110,7 @@ def perform_action(db: OrmSession, model: UebaModel, sess: Session, user: User,
 
     candidate = _candidate_event(sess, user, action, resource, records)
     events = sorted(sess.events, key=lambda e: e.timestamp) + [candidate]
-    assessment = assess(user, events, model)
+    assessment = assess(user, events, model, jit_privileges=jit.active_privileges(db, user))
     decision, severity = decide(assessment.score, assessment.insider_type)
 
     sess.risk_score = assessment.score

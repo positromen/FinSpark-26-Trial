@@ -1,4 +1,6 @@
 """REST + WebSocket API: auth, employee portal, SOC console, PQC layer."""
+import base64
+import hashlib
 import json
 from datetime import datetime
 
@@ -6,17 +8,18 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as OrmSession
 
-from app import bank
+from app import bank, jit
 from app.api.ws import feed_endpoint, manager
 from app.config import settings
 from app.detection import live
-from app.detection.response import respond
+from app.detection.evaluate import run_evaluation
+from app.detection.response import decide, respond
 from app.detection.rules import dominant_insider_type, evaluate
 from app.detection.score import assess
 from app.detection.ueba import UebaModel
 from app.models.entities import Alert, AuditLogEntry, Session, SessionCommand, User
 from app.pam import access_review
-from app.security import audit, pqc, vault
+from app.security import audit, keys, pqc, vault
 from app.security.auth import (create_token, current_user, get_db, require_analyst,
                                verify_password)
 from app.simulator.attack import (trigger_compromised, trigger_malicious,
@@ -72,13 +75,57 @@ async def _broadcast_activity(user: User, sess: Session, outcome: live.ActionOut
 class LoginIn(BaseModel):
     username: str
     password: str
+    mfa_code: str | None = None
+
+
+def _login_risk_factors(user: User) -> list[str]:
+    """Risk-based authentication: context signals that harden the front door.
+
+    A correct password is not enough when the account itself is suspicious —
+    the same signals the detection engine scores are checked *at login*, and any
+    hit demands step-up MFA before a token is issued.
+    """
+    factors = []
+    if user.is_dormant:
+        factors.append("dormant account waking up")
+    if user.access_expires_at and user.access_expires_at < datetime.now():
+        days = (datetime.now() - user.access_expires_at).days
+        factors.append(f"access grant expired {days} days ago")
+    if user.is_dormant or user.is_vendor:
+        # dormant/vendor logins arrive from an unregistered context (VPN exit, unknown device)
+        factors.append("login from unrecognized network/device context")
+    return factors
 
 
 @router.post("/auth/login")
-def login(body: LoginIn, db: OrmSession = Depends(get_db)) -> dict:
+async def login(body: LoginIn, db: OrmSession = Depends(get_db)) -> dict:
     user = db.query(User).filter_by(username=body.username).first()
     if user is None or not verify_password(body.password, user.password_hash):
         raise HTTPException(401, "invalid username or password")
+
+    factors = _login_risk_factors(user)
+    if factors:
+        if not body.mfa_code:
+            audit.append_entry(db, actor="prahari-auth", action="LOGIN_CHALLENGED",
+                               payload=f"user={user.username} factors={'; '.join(factors)}")
+            return {"mfa_required": True, "factors": factors,
+                    "message": "Risk-based authentication: step-up verification required."}
+        if body.mfa_code != settings.mfa_code:
+            audit.append_entry(db, actor="prahari-auth", action="LOGIN_MFA_FAILED",
+                               payload=f"user={user.username} factors={'; '.join(factors)}")
+            db.add(Alert(user_id=user.id, session_id=None, severity="WARNING",
+                         action_taken="STEP_UP_MFA", insider_type=None,
+                         message=f"Failed step-up MFA at login for risky account "
+                                 f"'{user.username}' ({'; '.join(factors)})"))
+            db.commit()
+            await manager.broadcast({"type": "alert", "user": user.username, "role": user.role,
+                                     "severity": "WARNING", "action": "MFA_FAILED",
+                                     "score": 0, "insider_type": None,
+                                     "reasons": [f"Failed login MFA: {f}" for f in factors]})
+            raise HTTPException(401, "invalid MFA code")
+        audit.append_entry(db, actor="prahari-auth", action="LOGIN_MFA_VERIFIED",
+                           payload=f"user={user.username} factors={'; '.join(factors)}")
+
     return {"token": create_token(user), "user": {
         "username": user.username, "name": user.name, "role": user.role,
         "account_type": user.account_type, "is_dormant": user.is_dormant,
@@ -197,10 +244,14 @@ class TransferIn(BaseModel):
     mode: str = "NEFT"
 
 
-def _current_session_risk(db: OrmSession, user: User) -> float:
-    sess = (db.query(Session)
+def _current_live_session(db: OrmSession, user: User) -> Session | None:
+    return (db.query(Session)
             .filter(Session.user_id == user.id, Session.status.in_(["ACTIVE", "BLOCKED"]))
             .order_by(Session.id.desc()).first())
+
+
+def _current_session_risk(db: OrmSession, user: User) -> float:
+    sess = _current_live_session(db, user)
     return sess.risk_score if sess else 0.0
 
 
@@ -272,6 +323,89 @@ async def bank_tx_reject(tx_id: int, user: User = Depends(_employee),
     return r
 
 
+# ================= CREDENTIAL CHECKOUT (PQC vault -> PAM workflow) =================
+
+class CheckoutIn(BaseModel):
+    name: str
+
+
+@router.get("/vault/credentials")
+def vault_credentials(user: User = Depends(_employee),
+                      db: OrmSession = Depends(get_db)) -> dict:
+    """The credential desk: what can be checked out + this user's checkout history."""
+    return vault.list_credentials(db, user)
+
+
+@router.post("/vault/checkout")
+async def vault_checkout(body: CheckoutIn, user: User = Depends(_employee),
+                         db: OrmSession = Depends(get_db)) -> dict:
+    """Time-boxed credential checkout, gated by the caller's live session risk.
+
+    The secret is unsealed from the ML-KEM-768 vault only if the session is
+    trusted; the checkout (or the refusal) is signed into the audit chain and
+    broadcast to the SOC.
+    """
+    sess = _current_live_session(db, user)
+    risk = sess.risk_score if sess else 0.0
+    blocked = bool(sess and sess.status == "BLOCKED")
+    try:
+        result = vault.checkout_credential(db, user, body.name, risk,
+                                           sess.id if sess else None, session_blocked=blocked)
+    except KeyError:
+        raise HTTPException(404, f"no vault item named '{body.name}'")
+    except vault.CheckoutDenied as e:
+        audit.append_entry(db, actor="prahari-vault", action="CHECKOUT_DENIED",
+                           payload=f"user={user.username} credential={body.name} reason={e}")
+        db.add(Alert(user_id=user.id, session_id=sess.id if sess else None,
+                     severity="CRITICAL", action_taken="BLOCK", insider_type=None,
+                     message=f"Vault: credential checkout of '{body.name}' by "
+                             f"{user.username} DENIED — {e}"))
+        db.commit()
+        await manager.broadcast({"type": "alert", "user": user.username, "role": user.role,
+                                 "severity": "CRITICAL", "action": "CHECKOUT_DENIED",
+                                 "score": round(risk, 1), "insider_type": None,
+                                 "reasons": [f"Credential checkout refused: {e}"]})
+        raise HTTPException(403, f"checkout denied — {e}")
+
+    audit.append_entry(db, actor=user.username, action="CREDENTIAL_CHECKOUT",
+                       payload=f"credential={body.name} session={sess.id if sess else '-'} "
+                               f"risk={risk:.0f} lease={settings.checkout_ttl_seconds}s")
+    await manager.broadcast({"type": "alert", "user": user.username, "role": user.role,
+                             "severity": "INFO", "action": "CHECKOUT",
+                             "score": round(risk, 1), "insider_type": None,
+                             "reasons": [f"Credential '{body.name}' checked out "
+                                         f"({settings.checkout_ttl_seconds // 60} min lease)"]})
+    return result
+
+
+# ======================= JUST-IN-TIME ACCESS (employee side) =======================
+
+class JitRequestIn(BaseModel):
+    privilege: str
+    justification: str
+    duration_minutes: int = 15
+
+
+@router.get("/jit/mine")
+def jit_mine(user: User = Depends(_employee), db: OrmSession = Depends(get_db)) -> list[dict]:
+    return jit.list_grants(db, user)
+
+
+@router.post("/jit/request")
+async def jit_request(body: JitRequestIn, user: User = Depends(_employee),
+                      db: OrmSession = Depends(get_db)) -> dict:
+    try:
+        g = jit.request_grant(db, user, body.privilege, body.justification,
+                              body.duration_minutes)
+    except jit.JitError as e:
+        raise HTTPException(400, str(e))
+    audit.append_entry(db, actor=user.username, action="JIT_REQUESTED",
+                       payload=f"grant={g['id']} privilege={body.privilege} "
+                               f"duration={body.duration_minutes}m reason={body.justification}")
+    await manager.broadcast({"type": "jit", "event": "requested", **g})
+    return g
+
+
 # ======================= SOC CONSOLE (analyst only) =======================
 
 @router.get("/soc/overview")
@@ -322,7 +456,8 @@ def _live_sessions(db: OrmSession) -> list[dict]:
         out.append({
             "id": s.id, "user": s.user.username, "name": s.user.name, "role": s.user.role,
             "status": s.status, "score": round(s.risk_score, 1),
-            "insider_type": dominant_insider_type(evaluate(s.user, evs)),
+            "insider_type": dominant_insider_type(
+                evaluate(s.user, evs, jit_privileges=jit.active_privileges(db, s.user))),
             "source_ip": s.source_ip, "geo": s.geo, "device": s.device,
             "started_at": s.started_at.isoformat(),
             "reasons": json.loads(s.risk_reasons or "[]"),
@@ -418,6 +553,46 @@ async def soc_dismiss(session_id: int, user: User = Depends(require_analyst),
     return {"ok": True, "session_id": session_id, "dismissed_by": user.username}
 
 
+@router.get("/soc/jit")
+def soc_jit(user: User = Depends(require_analyst), db: OrmSession = Depends(get_db)) -> list[dict]:
+    """The JIT approvals queue: every elevation request with live status/expiry."""
+    return jit.list_grants(db)
+
+
+@router.post("/soc/jit/{grant_id}/approve")
+async def soc_jit_approve(grant_id: int, user: User = Depends(require_analyst),
+                          db: OrmSession = Depends(get_db)) -> dict:
+    try:
+        g = jit.decide_grant(db, grant_id, user.username, approve=True)
+    except jit.JitError as e:
+        raise HTTPException(400, str(e))
+    audit.append_entry(db, actor=user.username, action="JIT_APPROVED",
+                       payload=f"grant={grant_id} user={g['user']} privilege={g['privilege']} "
+                               f"expires={g['expires_at']}")
+    await manager.broadcast({"type": "jit", "event": "approved", **g})
+    return g
+
+
+@router.post("/soc/jit/{grant_id}/deny")
+async def soc_jit_deny(grant_id: int, user: User = Depends(require_analyst),
+                       db: OrmSession = Depends(get_db)) -> dict:
+    try:
+        g = jit.decide_grant(db, grant_id, user.username, approve=False)
+    except jit.JitError as e:
+        raise HTTPException(400, str(e))
+    audit.append_entry(db, actor=user.username, action="JIT_DENIED",
+                       payload=f"grant={grant_id} user={g['user']} privilege={g['privilege']}")
+    await manager.broadcast({"type": "jit", "event": "denied", **g})
+    return g
+
+
+@router.get("/soc/checkouts")
+def soc_checkouts(user: User = Depends(require_analyst),
+                  db: OrmSession = Depends(get_db)) -> list[dict]:
+    """Every credential checkout and refusal, newest first (PAM vault oversight)."""
+    return vault.list_all_checkouts(db)
+
+
 @router.get("/soc/sessions/{session_id}/trajectory")
 def soc_trajectory(session_id: int, user: User = Depends(require_analyst),
                    db: OrmSession = Depends(get_db)) -> dict:
@@ -427,9 +602,10 @@ def soc_trajectory(session_id: int, user: User = Depends(require_analyst),
         raise HTTPException(404, "session not found")
     model = get_model(db)
     events = sorted(sess.events, key=lambda e: e.timestamp)
+    jit_privs = jit.active_privileges(db, sess.user)
     traj = []
     for k in range(1, len(events) + 1):
-        a = assess(sess.user, events[:k], model)
+        a = assess(sess.user, events[:k], model, jit_privileges=jit_privs)
         traj.append({"step": k, "action": events[k - 1].action_type,
                      "resource": events[k - 1].resource, "score": round(a.score, 1)})
     return {"session_id": session_id, "user": sess.user.username, "trajectory": traj}
@@ -445,7 +621,7 @@ def soc_model(session_id: int, user: User = Depends(require_analyst),
     model = get_model(db)
     events = sorted(sess.events, key=lambda e: e.timestamp)
     ur = model.score_session(sess.user, events)
-    a = assess(sess.user, events, model)
+    a = assess(sess.user, events, model, jit_privileges=jit.active_privileges(db, sess.user))
     return {"user": sess.user.username, "role": sess.user.role,
             "card": model.model_card(),
             "features": model.feature_breakdown(sess.user, events),
@@ -456,17 +632,112 @@ def soc_model(session_id: int, user: User = Depends(require_analyst),
             "insider_type": a.insider_type}
 
 
+@router.get("/soc/model/eval")
+def soc_model_eval(force: bool = False, user: User = Depends(require_analyst),
+                   db: OrmSession = Depends(get_db)) -> dict:
+    """Measured detector performance on a held-out sandbox: detection rate,
+    typing/response accuracy, and the false-alarm profile on benign traffic."""
+    return run_evaluation(force=force)
+
+
+@router.get("/soc/sessions/{session_id}/report")
+def soc_incident_report(session_id: int, user: User = Depends(require_analyst),
+                        db: OrmSession = Depends(get_db)) -> dict:
+    """One-click incident report: a self-contained, ML-DSA-65-signed evidence pack
+    (session facts, replay transcript, score trajectory, model insights, alerts,
+    audit extract, chain status) an analyst can hand to compliance as-is."""
+    sess = db.get(Session, session_id)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    model = get_model(db)
+    events = sorted(sess.events, key=lambda e: e.timestamp)
+    jit_privs = jit.active_privileges(db, sess.user)
+    a = assess(sess.user, events, model, jit_privileges=jit_privs)
+    action, severity = decide(a.score, a.insider_type)
+    ur = model.score_session(sess.user, events)
+    cmds = (db.query(SessionCommand).filter_by(session_id=session_id)
+            .order_by(SessionCommand.timestamp, SessionCommand.id).all())
+    alerts = (db.query(Alert).filter_by(session_id=session_id)
+              .order_by(Alert.created_at).all())
+    needle = f"session={session_id}"
+    audit_rows = [e for e in db.query(AuditLogEntry).order_by(AuditLogEntry.id).all()
+                  if needle in (e.payload or "") or sess.user.username in (e.payload or "")]
+    chain = audit.verify_chain(db)
+
+    trajectory = []
+    for k in range(1, len(events) + 1):
+        step = assess(sess.user, events[:k], model, jit_privileges=jit_privs)
+        trajectory.append({"step": k, "action": events[k - 1].action_type,
+                           "resource": events[k - 1].resource, "score": round(step.score, 1)})
+
+    report = {
+        "title": "Prahari privileged-session incident report",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_by": user.username,
+        "session": {
+            "id": sess.id, "user": sess.user.username, "name": sess.user.name,
+            "role": sess.user.role, "status": sess.status,
+            "risk_score": round(sess.risk_score, 1),
+            "started_at": sess.started_at.isoformat(),
+            "ended_at": sess.ended_at.isoformat() if sess.ended_at else None,
+            "source_ip": sess.source_ip, "geo": sess.geo, "device": sess.device,
+        },
+        "assessment": {
+            "score": round(a.score, 1), "insider_type": a.insider_type,
+            "recommended_response": action, "severity": severity,
+            "reasons": a.reasons,
+            "rules_fired": [{"rule": h.rule, "reason": h.reason, "weight": h.weight,
+                             "insider_type": h.insider_type} for h in a.rule_hits],
+        },
+        "model_insights": {
+            "anomaly": round(ur.anomaly_score, 1),
+            "self_deviation": round(ur.self_deviation, 1),
+            "peer_deviation": round(ur.peer_deviation, 1),
+            "factors": ur.factors,
+            "features": model.feature_breakdown(sess.user, events),
+            "model_card": model.model_card(),
+        },
+        "risk_trajectory": trajectory,
+        "session_transcript": [{"t": c.timestamp.isoformat(), "command": c.command,
+                                "outcome": c.outcome} for c in cmds],
+        "alerts": [{"t": al.created_at.isoformat(), "severity": al.severity,
+                    "action_taken": al.action_taken, "insider_type": al.insider_type,
+                    "message": al.message} for al in alerts],
+        "audit_extract": [{"id": e.id, "t": e.timestamp.isoformat(), "actor": e.actor,
+                           "action": e.action, "payload": e.payload,
+                           "entry_hash": e.entry_hash} for e in audit_rows[-25:]],
+        "audit_chain": {"ok": chain.ok, "entries_checked": chain.entries_checked,
+                        "first_bad_id": chain.first_bad_id, "problem": chain.problem},
+    }
+
+    # Seal the pack: ML-DSA-sign the canonical report JSON with the audit key, so
+    # the exported file is itself verifiable evidence (any edit breaks the seal).
+    canonical = json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
+    digest = hashlib.sha256(canonical).hexdigest()
+    _, audit_sec = keys.audit_keypair()
+    signature = base64.b64encode(pqc.sign(audit_sec, canonical)).decode()
+    audit.append_entry(db, actor=user.username, action="REPORT_EXPORTED",
+                       payload=f"session={session_id} user={sess.user.username} sha256={digest[:16]}")
+    return {"report": report, "evidence_sha256": digest,
+            "signature": signature, "signature_alg": pqc.SIG_ALG,
+            "note": "signature covers the canonical (sorted, compact) JSON of 'report'"}
+
+
 @router.get("/soc/metrics")
 def soc_metrics(user: User = Depends(require_analyst),
                 db: OrmSession = Depends(get_db)) -> dict:
     """Business-impact metrics for the SOC overview strip — all computed from live data."""
     review = access_review(db)
+    grants = jit.list_grants(db)
     return {
         "privileged_accounts": db.query(User).filter(User.account_type == "EMPLOYEE").count(),
         "sessions_monitored": db.query(Session).count(),
         "threats_blocked": db.query(Alert).filter(Alert.action_taken.in_(["BLOCK", "LOCKED"])).count(),
         "alerts_total": db.query(Alert).count(),
         "high_risk_accounts": sum(1 for r in review if r["risk"] == "HIGH"),
+        "jit_pending": sum(1 for g in grants if g["status"] == "PENDING"),
+        "jit_active": sum(1 for g in grants if g["status"] == "ACTIVE"),
+        "checkouts_active": sum(1 for c in vault.list_all_checkouts(db) if c["status"] == "ACTIVE"),
         "detect_latency": "< 1s",
         "pqc": f"{pqc.KEM_ALG} / {pqc.SIG_ALG}",
     }

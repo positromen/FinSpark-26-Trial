@@ -127,6 +127,41 @@ class VaultItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class CredentialCheckout(Base):
+    """A time-boxed checkout of a vault credential by a privileged user (PAM workflow)."""
+
+    __tablename__ = "credential_checkouts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))          # vault item checked out
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    session_id: Mapped[int | None] = mapped_column(ForeignKey("sessions.id"), nullable=True)
+    checked_out_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE")  # ACTIVE/EXPIRED/DENIED
+    risk_at_checkout: Mapped[float] = mapped_column(Float, default=0.0)
+    denied_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class JitGrant(Base):
+    """A just-in-time privilege-elevation grant: requested, approved, time-boxed, auto-expiring."""
+
+    __tablename__ = "jit_grants"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    privilege: Mapped[str] = mapped_column(String(128))     # resource the elevation covers
+    justification: Mapped[str] = mapped_column(String(300))
+    duration_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    requested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    status: Mapped[str] = mapped_column(String(16), default="PENDING")  # PENDING/ACTIVE/DENIED/EXPIRED
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped[User] = relationship()
+
+
 class BankAccount(Base):
     """A customer bank account the employee operates on (the 'real work' side)."""
 

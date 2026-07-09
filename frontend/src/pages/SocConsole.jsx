@@ -6,7 +6,7 @@ import Gauge from '../components/Gauge.jsx'
 
 const TITLES = { overview: 'PRAHARI · SOC Console', sessions: 'Live Privileged Sessions', alerts: 'Alerts Feed',
   analysis: 'Threat Analysis', model: 'AI Model Insights', replay: 'Session Replay', heatmap: 'Risk Heatmap',
-  pam: 'PAM Access Review', audit: 'Audit Chain Integrity' }
+  pam: 'PAM Access Review', jitdesk: 'JIT & Credential Desk', audit: 'Audit Chain Integrity' }
 const SCEN = [
   { kind: 'malicious', label: '☠ Malicious', bg: 'rgba(208,59,59,.9)', fg: '#fff' },
   { kind: 'compromised', label: '🎭 Compromised', bg: 'rgba(57,135,229,.9)', fg: '#fff' },
@@ -46,6 +46,9 @@ export default function SocConsole({ user, onLogout }) {
   const [toast, setToast] = useState(null)
   const [decisions, setDecisions] = useState({})   // sessionId -> {label, by, at}
   const [busyAction, setBusyAction] = useState(null) // `${id}:${kind}` while a POST is in flight
+  const [jitQueue, setJitQueue] = useState([])
+  const [checkouts, setCheckouts] = useState([])
+  const [evalData, setEvalData] = useState(null)   // measured model performance (lazy)
   const selRef = useRef(null)
   const flashT = useRef(null)
   const toastT = useRef(null)
@@ -70,11 +73,12 @@ export default function SocConsole({ user, onLogout }) {
   const selected = sessions.find((s) => s.id === selId) || sessions[0] || null
 
   const refresh = useCallback(async () => {
-    const [o, l, a, p, m] = await Promise.all([
+    const [o, l, a, p, m, j, co] = await Promise.all([
       getJSON('/soc/overview'), getJSON('/soc/live'), getJSON('/soc/alerts?limit=25'),
       getJSON('/soc/access-review'), getJSON('/soc/metrics'),
+      getJSON('/soc/jit').catch(() => []), getJSON('/soc/checkouts').catch(() => []),
     ])
-    setOv(o); setLive(l); setAlerts(a); setPam(p); setMetrics(m)
+    setOv(o); setLive(l); setAlerts(a); setPam(p); setMetrics(m); setJitQueue(j); setCheckouts(co)
   }, [])
 
   const loadDetail = useCallback(async (id) => {
@@ -112,12 +116,36 @@ export default function SocConsole({ user, onLogout }) {
     } finally { setBusyAction(null) }
   }, [refresh, loadDetail, user, flashToast])
 
+  const decideJit = useCallback(async (id, kind) => {
+    try {
+      const g = await postJSON(`/soc/jit/${id}/${kind}`)
+      flashToast(kind === 'approve'
+        ? { tone: 'good', title: 'JIT GRANT APPROVED', text: `${g.user} · ${g.privilege} · ${g.duration_minutes} min, auto-expires`, audit: true }
+        : { tone: 'crit', title: 'JIT GRANT DENIED', text: `${g.user} · ${g.privilege}`, audit: true })
+      await refresh()
+    } catch { flashToast({ tone: 'crit', title: 'ACTION FAILED', text: 'could not reach the server' }) }
+  }, [refresh, flashToast])
+
+  const downloadReport = useCallback(async (id) => {
+    try {
+      const pack = await getJSON(`/soc/sessions/${id}/report`)
+      const blob = new Blob([JSON.stringify(pack, null, 2)], { type: 'application/json' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `prahari-incident-session-${id}.json`
+      a.click()
+      URL.revokeObjectURL(a.href)
+      flashToast({ tone: 'good', title: 'EVIDENCE PACK EXPORTED',
+                   text: `session #${id} · ML-DSA-65 signed · sha256 ${String(pack.evidence_sha256 || '').slice(0, 12)}…`, audit: true })
+    } catch { flashToast({ tone: 'crit', title: 'EXPORT FAILED', text: 'could not build the report' }) }
+  }, [flashToast])
+
   useEffect(() => {
     const pull = () => { refresh().catch(() => {}); getJSON('/audit').then(setAudit).catch(() => {}) }
     pull()
     const flash = (u) => { if (!u) return; setFlashUser(u); clearTimeout(flashT.current); flashT.current = setTimeout(() => setFlashUser(null), 3500) }
     const ws = openFeed((f) => {
-      if (f.type === 'activity' || f.type === 'alert' || f.type === 'presence') { flash(f.user); pull() }
+      if (f.type === 'activity' || f.type === 'alert' || f.type === 'presence' || f.type === 'jit') { flash(f.user); pull() }
       // follow the live threat: jump the console's focus to the flagged session
       if (f.type === 'alert' && f.session_id) { selRef.current = f.session_id; setSelId(f.session_id) }
       if (f.type === 'audit_tamper') setChain({ ok: f.chain_ok, problem: f.problem, badId: f.first_bad_id })
@@ -135,6 +163,10 @@ export default function SocConsole({ user, onLogout }) {
     }
   }, [sessions])
   useEffect(() => { loadDetail(selected?.id) }, [selected?.id, loadDetail])
+  // measured model performance: fetch once, on first visit to the Model view
+  useEffect(() => {
+    if (section === 'model' && !evalData) getJSON('/soc/model/eval').then(setEvalData).catch(() => {})
+  }, [section, evalData])
 
   const select = (id) => { selRef.current = id; setSelId(id) }
   const runScenario = async (kind) => {
@@ -163,6 +195,8 @@ export default function SocConsole({ user, onLogout }) {
     ] },
     { title: 'GOVERNANCE', items: [
       { label: 'PAM Access Review', icon: '🔑', active: section === 'pam', onClick: () => setSection('pam') },
+      { label: 'JIT & Credentials', icon: '⏱', active: section === 'jitdesk', onClick: () => setSection('jitdesk'),
+        badge: jitQueue.filter((g) => g.status === 'PENDING').length ? String(jitQueue.filter((g) => g.status === 'PENDING').length) : '', badgeBg: C.warnInk },
       { label: 'Audit Chain', icon: '⛓', active: section === 'audit', onClick: () => setSection('audit'), badge: chain.ok ? '' : '!', badgeBg: C.critical },
     ] },
   ]
@@ -224,14 +258,15 @@ export default function SocConsole({ user, onLogout }) {
             </div>
           )}
 
-          {section === 'overview' && <Overview {...{ sessions, selected, select, flashUser, detail, alerts, metrics, respond, decisions, busyAction }} />}
+          {section === 'overview' && <Overview {...{ sessions, selected, select, flashUser, detail, alerts, metrics, respond, decisions, busyAction, downloadReport }} />}
           {section === 'sessions' && <Sessions {...{ sessions, selected, select, flashUser, decisions }} />}
           {section === 'alerts' && <Alerts alerts={alerts} flashUser={flashUser} />}
-          {section === 'analysis' && <Analysis selected={selected} timeline={detail.events} respond={respond} decisions={decisions} busyAction={busyAction} />}
-          {section === 'model' && <ModelInsights selected={selected} model={detail.model} trajectory={detail.trajectory} />}
+          {section === 'analysis' && <Analysis selected={selected} timeline={detail.events} respond={respond} decisions={decisions} busyAction={busyAction} downloadReport={downloadReport} />}
+          {section === 'model' && <ModelInsights selected={selected} model={detail.model} trajectory={detail.trajectory} evalData={evalData} />}
           {section === 'replay' && <Replay selected={selected} commands={detail.commands} />}
           {section === 'heatmap' && <Heatmap heat={ov.heatmap} />}
           {section === 'pam' && <Pam rows={pam} />}
+          {section === 'jitdesk' && <JitDesk queue={jitQueue} checkouts={checkouts} decideJit={decideJit} />}
           {section === 'audit' && <Audit entries={audit} chain={chain} />}
         </div>
       </div>
@@ -391,7 +426,7 @@ function MetricsStrip({ metrics }) {
   )
 }
 
-function ResponseBar({ selected, respond, decisions, busyAction }) {
+function ResponseBar({ selected, respond, decisions, busyAction, downloadReport }) {
   if (!selected) return null
   const id = selected.id
   const decided = decisions?.[id]
@@ -407,10 +442,16 @@ function ResponseBar({ selected, respond, decisions, busyAction }) {
   const decoColor = decided?.label === 'LOCKED' ? C.critical : decided?.label === 'APPROVED' ? C.good : C.muted
   return (
     <div style={{ width: '100%' }}>
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         {btn('⛔ Lock account', 'lock', C.critical, '#fff')}
         {btn('✓ Approve', 'approve', '#0e7a0e', '#fff')}
         {btn('⊘ Dismiss', 'dismiss', '#f2f5f9', C.muted, '#ccd3dd')}
+        {downloadReport && (
+          <button className="btn" style={{ flex: 1, minWidth: 120, background: C.navy, color: '#fff', padding: '9px 6px', fontSize: 12 }}
+                  onClick={() => downloadReport(selected.id)} title="Export the ML-DSA-signed incident evidence pack">
+            ⬇ Evidence pack
+          </button>
+        )}
       </div>
       {decided && (
         <div style={{ marginTop: 9, display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5,
@@ -423,7 +464,7 @@ function ResponseBar({ selected, respond, decisions, busyAction }) {
   )
 }
 
-function Overview({ sessions, selected, select, flashUser, detail, alerts, metrics, respond, decisions, busyAction }) {
+function Overview({ sessions, selected, select, flashUser, detail, alerts, metrics, respond, decisions, busyAction, downloadReport }) {
   return (
     <>
     <MetricsStrip metrics={metrics} />
@@ -435,7 +476,7 @@ function Overview({ sessions, selected, select, flashUser, detail, alerts, metri
       <div className="card card-pad" style={{ gridColumn: 'span 5', display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}><SelectedCard selected={selected} /></div>
         <div className="label">ANALYST RESPONSE</div>
-        <ResponseBar selected={selected} respond={respond} decisions={decisions} busyAction={busyAction} />
+        <ResponseBar selected={selected} respond={respond} decisions={decisions} busyAction={busyAction} downloadReport={downloadReport} />
       </div>
       <div className="card card-pad" style={{ gridColumn: 'span 4', minWidth: 0 }}><Why selected={selected} /></div>
       <div className="card card-pad" style={{ gridColumn: 'span 4', minWidth: 0 }}>
@@ -490,7 +531,7 @@ function Alerts({ alerts, flashUser }) {
   )
 }
 
-function Analysis({ selected, timeline, respond, decisions, busyAction }) {
+function Analysis({ selected, timeline, respond, decisions, busyAction, downloadReport }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 14, alignItems: 'start' }}>
       <div className="card card-pad">
@@ -507,7 +548,7 @@ function Analysis({ selected, timeline, respond, decisions, busyAction }) {
         </div>
         <Why selected={selected} />
         <div className="label" style={{ margin: '16px 0 8px' }}>ANALYST RESPONSE</div>
-        <ResponseBar selected={selected} respond={respond} decisions={decisions} busyAction={busyAction} />
+        <ResponseBar selected={selected} respond={respond} decisions={decisions} busyAction={busyAction} downloadReport={downloadReport} />
       </div>
       <div className="card card-pad">
         <div className="label" style={{ marginBottom: 10 }}>SESSION TIMELINE</div>
@@ -533,7 +574,45 @@ function Sparkline({ points, height = 44 }) {
   )
 }
 
-function ModelInsights({ selected, model, trajectory }) {
+function EvalPanel({ ev }) {
+  if (!ev) return (
+    <div className="card card-pad">
+      <div className="label" style={{ marginBottom: 8 }}>MEASURED PERFORMANCE</div>
+      <div style={{ fontSize: 12, color: C.muted2 }}>Benchmarking on the held-out sandbox…</div>
+    </div>
+  )
+  const pct = (x) => `${Math.round(x * 100)}%`
+  return (
+    <div className="card card-pad">
+      <div className="label" style={{ marginBottom: 10 }}>MEASURED PERFORMANCE · HELD-OUT BENCHMARK</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 10, marginBottom: 10 }}>
+        {[['DETECTION', pct(ev.detection_rate), ev.detection_rate === 1 ? C.good : C.warnInk],
+          ['CORRECT RESPONSE', pct(ev.response_accuracy), ev.response_accuracy === 1 ? C.good : C.warnInk],
+          ['TYPED CORRECTLY', pct(ev.typing_accuracy), ev.typing_accuracy === 1 ? C.good : C.warnInk],
+          ['FALSE BLOCKS', String(ev.false_blocks), ev.false_blocks === 0 ? C.good : C.critical]].map(([l, v, c]) => (
+          <div key={l}><div className="label" style={{ fontSize: 9.5 }}>{l}</div>
+            <div className="num" style={{ fontSize: 20, fontWeight: 700, color: c }}>{v}</div></div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        {(ev.attacks || []).map((a) => (
+          <div key={a.kind} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11.5 }}>
+            {typePill(a.kind, 9)}
+            <span className="mono" style={{ color: C.ink3, flex: 1 }}>score {a.score}</span>
+            <span className="mono" style={{ fontWeight: 700, color: a.correct_response ? C.good : C.critical }}>
+              {a.response}{a.correct_response ? ' ✓' : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 10.5, color: C.muted2, marginTop: 10, lineHeight: 1.5 }}>
+        {ev.benign_sessions} benign sessions · false-alarm rate {(ev.false_alarm_rate * 100).toFixed(1)}% · {ev.methodology}
+      </div>
+    </div>
+  )
+}
+
+function ModelInsights({ selected, model, trajectory, evalData }) {
   if (!selected) return <div className="card card-pad" style={{ color: C.muted2, fontSize: 13 }}>Select a session to inspect the model.</div>
   const card = model?.card
   return (
@@ -594,6 +673,7 @@ function ModelInsights({ selected, model, trajectory }) {
             <Row k="Features" v={card ? card.features.length : '—'} />
           </div>
         </div>
+        <EvalPanel ev={evalData} />
       </div>
     </div>
   )
@@ -684,6 +764,73 @@ function Pam({ rows }) {
           </div>
         ) })}
       </div></div>
+    </div>
+  )
+}
+
+const GSTATUS = { PENDING: { c: '#a16207', bg: 'rgba(250,178,25,.16)' }, ACTIVE: { c: '#0e7a0e', bg: 'rgba(14,122,14,.12)' },
+  DENIED: { c: '#c02626', bg: 'rgba(192,38,38,.1)' }, EXPIRED: { c: '#8494a8', bg: 'rgba(132,148,168,.14)' } }
+const COSTATUS = { ACTIVE: '#0e7a0e', EXPIRED: '#8494a8', DENIED: '#c02626' }
+const mmssS = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+
+function JitDesk({ queue, checkouts, decideJit }) {
+  const pending = queue.filter((g) => g.status === 'PENDING')
+  const rest = queue.filter((g) => g.status !== 'PENDING')
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.2fr) minmax(0,1fr)', gap: 14, alignItems: 'start' }}>
+      <div className="card card-pad">
+        <div className="label" style={{ marginBottom: 10 }}>JUST-IN-TIME ELEVATION · APPROVAL QUEUE</div>
+        {pending.length === 0 && <div style={{ fontSize: 12.5, color: C.muted2, padding: '6px 0' }}>No pending requests — no standing privilege out there.</div>}
+        {pending.map((g) => (
+          <div key={g.id} className="flash" style={{ border: '1px solid rgba(250,178,25,.5)', background: 'rgba(250,178,25,.06)',
+                        borderRadius: 9, padding: '12px 14px', marginBottom: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span className="mono" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{g.user}</span>
+              <span style={{ fontSize: 11.5, color: C.muted }}>{g.role}</span>
+              <span className="mono" style={{ fontSize: 12, color: C.seriousInk, fontWeight: 600 }}>{g.privilege}</span>
+              <span style={{ fontSize: 11.5, color: C.muted }}>· {g.duration_minutes} min</span>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                <button className="btn" style={{ background: C.good, color: '#fff', padding: '7px 13px', fontSize: 12 }} onClick={() => decideJit(g.id, 'approve')}>✓ Approve</button>
+                <button className="btn btn-ghost" style={{ padding: '7px 13px', fontSize: 12 }} onClick={() => decideJit(g.id, 'deny')}>✕ Deny</button>
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: C.ink3, marginTop: 6 }}>“{g.justification}”</div>
+          </div>
+        ))}
+        {rest.length > 0 && <div className="label" style={{ margin: '14px 0 8px' }}>GRANT HISTORY</div>}
+        {rest.map((g) => (
+          <div key={g.id} className="trow" style={{ display: 'flex', gap: 10, padding: '8px 0', alignItems: 'center' }}>
+            <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: C.ink2, minWidth: 84 }}>{g.user}</span>
+            <span className="mono" style={{ fontSize: 11.5, color: C.muted, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.privilege}</span>
+            <span className="pill" style={{ background: GSTATUS[g.status]?.bg, color: GSTATUS[g.status]?.c, fontSize: 9.5 }}>
+              {g.status === 'ACTIVE' && g.remaining_seconds != null ? `ACTIVE · ${mmssS(g.remaining_seconds)}` : g.status}
+            </span>
+          </div>
+        ))}
+        <div style={{ fontSize: 11, color: C.muted2, marginTop: 12, lineHeight: 1.55 }}>
+          An approved grant <b>sanctions privilege escalation on that one resource, for that window only</b> —
+          the rule engine stands down for the grant and re-arms the second it expires. Every decision is sealed to the audit chain.
+        </div>
+      </div>
+      <div className="card card-pad">
+        <div className="label" style={{ marginBottom: 10 }}>CREDENTIAL CHECKOUTS · PQC VAULT OVERSIGHT</div>
+        {checkouts.length === 0 && <div style={{ fontSize: 12.5, color: C.muted2 }}>No checkouts yet.</div>}
+        {checkouts.map((c) => (
+          <div key={c.id} className="trow" style={{ display: 'flex', gap: 10, padding: '8px 0', alignItems: 'center' }}>
+            <span className="mono" style={{ fontSize: 11.5, color: C.muted2, flex: 'none' }}>{T(c.checked_out_at)}</span>
+            <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: C.ink2, minWidth: 78 }}>{c.user}</span>
+            <span style={{ fontSize: 11.5, color: C.ink3, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: COSTATUS[c.status] || C.muted, flex: 'none' }}>
+              {c.status === 'ACTIVE' ? `ACTIVE · ${mmssS(c.remaining_seconds || 0)}` : c.status}
+            </span>
+          </div>
+        ))}
+        <div style={{ fontSize: 11, color: C.muted2, marginTop: 12, lineHeight: 1.55 }}>
+          Secrets live ML-KEM-768-sealed and are only unsealed on a <b>time-boxed, risk-gated checkout</b>.
+          A <span style={{ color: C.critical, fontWeight: 700 }}>DENIED</span> row means a high-risk session
+          asked for a credential and the vault refused — that refusal is signed evidence.
+        </div>
+      </div>
     </div>
   )
 }

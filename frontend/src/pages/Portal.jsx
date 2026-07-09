@@ -13,6 +13,7 @@ const ACTIONS = [
 ]
 const TITLES = { dashboard: 'Dashboard', console: 'Action Console', accounts: 'Customer Accounts',
   payments: 'Payments & Transfers', transactions: 'Transaction Ledger', approvals: 'Approvals',
+  credentials: 'Credential Vault', jit: 'Just-in-Time Access',
   risk: 'My Session Risk', activity: 'Session Activity Log' }
 const USER_TYPE = { ext_dsouza: 'malicious', ext_rao: 'negligent' }
 const MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'TRANSFER']
@@ -37,6 +38,9 @@ export default function Portal({ user, onLogout }) {
   const [xfer, setXfer] = useState({ from: '', to: '', amount: 100000, mode: 'NEFT' })
   const [txResult, setTxResult] = useState(null)   // {status, message}
   const [txBusy, setTxBusy] = useState(false)
+  const [creds, setCreds] = useState({ credentials: [], my_checkouts: [], ttl_seconds: 300 })
+  const [grants, setGrants] = useState([])
+  const [tick, setTick] = useState(0)              // 1s heartbeat for lease countdowns
 
   useEffect(() => {
     postJSON('/portal/bootstrap').then((b) => {
@@ -62,6 +66,16 @@ export default function Portal({ user, onLogout }) {
 
   useEffect(() => { loadBank() }, [loadBank])
   useEffect(() => { const t = setInterval(loadBank, 5000); return () => clearInterval(t) }, [loadBank])
+
+  const loadSecurity = useCallback(async () => {
+    try {
+      const [c, g] = await Promise.all([getJSON('/vault/credentials'), getJSON('/jit/mine')])
+      setCreds(c); setGrants(g)
+    } catch { /* ignore */ }
+  }, [])
+  useEffect(() => { loadSecurity() }, [loadSecurity])
+  useEffect(() => { const t = setInterval(loadSecurity, 5000); return () => clearInterval(t) }, [loadSecurity])
+  useEffect(() => { const t = setInterval(() => setTick((x) => x + 1), 1000); return () => clearInterval(t) }, [])
 
   const doTransfer = async () => {
     setTxBusy(true); setTxResult(null)
@@ -135,6 +149,9 @@ export default function Portal({ user, onLogout }) {
         badge: bank.pending.length ? String(bank.pending.length) : '', badgeBg: C.seriousInk },
     ] },
     { title: 'SECURITY', items: [
+      { label: 'Credential Vault', icon: '🔑', active: section === 'credentials', onClick: () => setSection('credentials') },
+      { label: 'JIT Access', icon: '⏱', active: section === 'jit', onClick: () => setSection('jit'),
+        badge: grants.filter((g) => g.status === 'ACTIVE').length ? String(grants.filter((g) => g.status === 'ACTIVE').length) : '', badgeBg: C.good },
       { label: 'Session Risk', icon: '◔', active: section === 'risk', onClick: () => setSection('risk') },
       { label: 'Activity Log', icon: '≣', active: section === 'activity', onClick: () => setSection('activity') },
     ] },
@@ -201,6 +218,8 @@ export default function Portal({ user, onLogout }) {
           {section === 'payments' && <Payments {...{ xfer, setXfer, bank, doTransfer, txBusy, txResult }} />}
           {section === 'transactions' && <Transactions transactions={bank.transactions} />}
           {section === 'approvals' && <Approvals pending={bank.pending} approveTx={approveTx} rejectTx={rejectTx} />}
+          {section === 'credentials' && <CredentialDesk creds={creds} reload={loadSecurity} blocked={blocked} />}
+          {section === 'jit' && <JitDesk grants={grants} resources={boot.all_resources} reload={loadSecurity} />}
           {section === 'risk' && <RiskPage score={score} />}
           {section === 'activity' && <Activity events={session?.events || []} />}
         </div>
@@ -491,6 +510,162 @@ function Approvals({ pending, approveTx, rejectTx }) {
             <div style={{ display: 'flex', gap: 6 }}>
               <button className="btn" style={{ background: C.good, color: '#fff', padding: '7px 12px', fontSize: 12 }} onClick={() => approveTx(t.id)}>Approve</button>
               <button className="btn btn-ghost" style={{ padding: '7px 12px', fontSize: 12 }} onClick={() => rejectTx(t.id)}>Reject</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+const CRED_LABEL = {
+  'core-banking-db-root': 'Core-banking DB · root password',
+  'payment-gateway-api-key': 'Payment gateway · API key',
+  'swift-terminal-cert-passphrase': 'SWIFT terminal · cert passphrase',
+}
+const mmss = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+const leaseLeft = (c) => Math.max(0, Math.floor((new Date(c.expires_at) - Date.now()) / 1000))
+
+function CredentialDesk({ creds, reload, blocked }) {
+  const [out, setOut] = useState(null)     // successful checkout {name, secret, expires_at}
+  const [deny, setDeny] = useState(null)   // refusal message
+  const [busy, setBusy] = useState(false)
+  const secLeft = out ? leaseLeft(out) : 0
+  if (out && secLeft <= 0) { setOut(null) }  // lease over -> secret disappears
+
+  const checkout = async (name) => {
+    setBusy(true); setDeny(null); setOut(null)
+    try { setOut(await postJSON('/vault/checkout', { name })) }
+    catch (e) { setDeny(String(e.message)) }
+    finally { setBusy(false); reload() }
+  }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.2fr) minmax(0,1fr)', gap: 16, alignItems: 'start' }}>
+      <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div className="label">QUANTUM-SAFE CREDENTIAL VAULT · ML-KEM-768 SEALED</div>
+        <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.55 }}>
+          Privileged secrets are never stored in the clear — each is sealed under a post-quantum key.
+          A checkout unseals one for a <b>{Math.round((creds.ttl_seconds || 300) / 60)}-minute lease</b>,
+          signs the event into the audit chain, and is <b>refused if your live session risk is {Math.round(creds.risk_ceiling || 70)}+</b>.
+        </div>
+        {creds.credentials.map((name) => (
+          <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 12, border: `1px solid ${C.ring}`, borderRadius: 9, padding: '12px 14px' }}>
+            <span style={{ width: 34, height: 34, borderRadius: 8, background: 'rgba(29,67,112,.1)', color: C.navy,
+                           display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>🔑</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{CRED_LABEL[name] || name}</div>
+              <div className="mono" style={{ fontSize: 11, color: C.muted2, marginTop: 2 }}>{name}</div>
+            </div>
+            <button className="btn btn-navy" style={{ padding: '7px 14px', fontSize: 12 }} disabled={busy || blocked}
+                    onClick={() => checkout(name)}>Check out</button>
+          </div>
+        ))}
+        {deny && (
+          <div className="flash" style={{ borderRadius: 9, padding: '12px 14px', border: `1px solid ${C.critical}`, background: 'rgba(192,38,38,.07)' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.critical }}>⛔ CHECKOUT DENIED — SOC ALERTED</div>
+            <div style={{ fontSize: 12, color: C.ink3, marginTop: 3 }}>{deny}</div>
+          </div>
+        )}
+        {out && (
+          <div style={{ borderRadius: 9, padding: '13px 15px', border: '1px solid rgba(14,122,14,.35)', background: 'rgba(14,122,14,.05)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: C.good }}>✓ UNSEALED · {CRED_LABEL[out.name] || out.name}</span>
+              <span className="mono" style={{ marginLeft: 'auto', fontSize: 12.5, fontWeight: 700, color: secLeft < 60 ? C.critical : C.warnInk }}>
+                lease {mmss(secLeft)}
+              </span>
+            </div>
+            <div className="mono" style={{ fontSize: 15, fontWeight: 600, color: C.ink, marginTop: 8, letterSpacing: .5,
+                                           background: '#fff', border: `1px dashed ${C.border}`, borderRadius: 7, padding: '9px 12px' }}>
+              {out.secret}
+            </div>
+            <div style={{ fontSize: 10.5, color: C.muted2, marginTop: 6 }}>checkout ML-DSA-signed into the audit chain · secret vanishes when the lease ends</div>
+          </div>
+        )}
+      </div>
+      <div className="card card-pad">
+        <div className="label" style={{ marginBottom: 10 }}>MY CHECKOUT HISTORY</div>
+        {creds.my_checkouts.length === 0 && <div style={{ fontSize: 12, color: C.muted2 }}>No checkouts yet.</div>}
+        {creds.my_checkouts.map((c) => (
+          <div key={c.id} className="trow" style={{ display: 'flex', gap: 10, padding: '9px 0', alignItems: 'baseline' }}>
+            <span className="mono" style={{ fontSize: 11.5, color: C.muted2, flex: 'none' }}>{T(c.checked_out_at)}</span>
+            <span style={{ fontSize: 12.5, color: C.ink2, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+            <span style={{ fontSize: 10.5, fontWeight: 700, flex: 'none',
+                           color: c.status === 'ACTIVE' ? C.good : c.status === 'DENIED' ? C.critical : C.muted2 }}>
+              {c.status === 'ACTIVE' ? `ACTIVE · ${mmss(leaseLeft(c))}` : c.status}
+            </span>
+          </div>
+        ))}
+        <div style={{ marginTop: 14, fontSize: 11.5, color: C.muted, lineHeight: 1.6 }}>
+          <b>Why it's safe:</b> the AES key that seals each secret <i>is</i> an ML-KEM-768 shared secret —
+          data harvested today cannot be decrypted by a future quantum computer. Every checkout and every
+          refusal is signed evidence.
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const GRANT_COLOR = { PENDING: C.warnInk, ACTIVE: C.good, DENIED: C.critical, EXPIRED: C.muted2 }
+
+function JitDesk({ grants, resources, reload }) {
+  const [form, setForm] = useState({ privilege: resources[0]?.name || '', duration: 15, justification: '' })
+  const [msg, setMsg] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const request = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      await postJSON('/jit/request', { privilege: form.privilege, justification: form.justification,
+                                       duration_minutes: Number(form.duration) })
+      setMsg({ ok: true, text: 'Request sent — awaiting SOC analyst approval.' })
+      setForm((f) => ({ ...f, justification: '' }))
+    } catch (e) { setMsg({ ok: false, text: String(e.message) }) }
+    finally { setBusy(false); reload() }
+  }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.2fr)', gap: 16, alignItems: 'start' }}>
+      <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
+        <div className="label">REQUEST TIME-BOXED ELEVATION</div>
+        <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.55 }}>
+          No standing privilege: escalation needs an <b>approved, auto-expiring grant</b>. With one, the
+          same “Escalate privilege” click is sanctioned; without one, it raises a malicious-pattern alarm.
+        </div>
+        <label className="field">System / privilege
+          <select className="select mono" value={form.privilege} style={{ fontSize: 13 }}
+                  onChange={(e) => setForm((f) => ({ ...f, privilege: e.target.value }))}>
+            {resources.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
+          </select>
+        </label>
+        <label className="field">Duration (minutes)
+          <input className="input mono" type="number" min="1" max="60" value={form.duration}
+                 onChange={(e) => setForm((f) => ({ ...f, duration: e.target.value }))} />
+        </label>
+        <label className="field">Business justification
+          <input className="input" placeholder="e.g. quarterly schema migration, change CHG-1024" value={form.justification}
+                 onChange={(e) => setForm((f) => ({ ...f, justification: e.target.value }))} />
+        </label>
+        <button className="btn btn-navy" disabled={busy || !form.justification.trim()} onClick={request}>
+          {busy ? 'Sending…' : 'Request elevation'}
+        </button>
+        {msg && <div style={{ fontSize: 12, fontWeight: 600, color: msg.ok ? C.good : C.critical }}>{msg.ok ? '✓' : '▲'} {msg.text}</div>}
+      </div>
+      <div className="card card-pad">
+        <div className="label" style={{ marginBottom: 10 }}>MY GRANTS</div>
+        {grants.length === 0 && <div style={{ fontSize: 12, color: C.muted2 }}>No elevation requests yet.</div>}
+        {grants.map((g) => (
+          <div key={g.id} style={{ border: `1px solid ${C.ring}`, borderRadius: 9, padding: '11px 13px', marginBottom: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>{g.privilege}</span>
+              <span style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 700, color: GRANT_COLOR[g.status] || C.muted }}>
+                {g.status === 'ACTIVE' && g.expires_at
+                  ? `ACTIVE · ${mmss(Math.max(0, Math.floor((new Date(g.expires_at) - Date.now()) / 1000)))} left`
+                  : g.status}
+              </span>
+            </div>
+            <div style={{ fontSize: 11.5, color: C.muted2, marginTop: 3 }}>
+              “{g.justification}” · {g.duration_minutes} min{g.approved_by ? ` · ${g.status === 'DENIED' ? 'denied' : 'approved'} by ${g.approved_by}` : ''}
             </div>
           </div>
         ))}

@@ -13,12 +13,14 @@ from app.models.db import init_db
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    # Ensure the customer-banking tables have data even on a pre-existing DB.
+    # Ensure banking data and vault credentials exist even on a pre-existing DB.
     from app.bank import seed_bank
     from app.models.db import SessionLocal
+    from app.security.vault import seed_credentials
     db = SessionLocal()
     try:
         seed_bank(db)
+        seed_credentials(db)
     finally:
         db.close()
     yield

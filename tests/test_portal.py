@@ -39,6 +39,10 @@ def client(tmp_path, monkeypatch):
 def _login(client, user, pw="prahari123"):
     r = client.post("/auth/login", json={"username": user, "password": pw})
     assert r.status_code == 200, r.text
+    if r.json().get("mfa_required"):  # risk-based login challenge (dormant/expired/vendor)
+        r = client.post("/auth/login", json={"username": user, "password": pw,
+                                             "mfa_code": "246810"})
+        assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 

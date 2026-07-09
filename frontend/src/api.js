@@ -44,14 +44,21 @@ export async function postJSON(path, body) {
   return r.json()
 }
 
-export async function login(username, password) {
+export async function login(username, password, mfaCode) {
   const r = await fetch('/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, mfa_code: mfaCode || null }),
   })
-  if (!r.ok) throw new Error('Invalid username or password')
+  if (!r.ok) {
+    let detail = 'Invalid username or password'
+    try { detail = (await r.json()).detail || detail } catch { /* ignore */ }
+    throw new Error(detail)
+  }
   const data = await r.json()
+  // Risk-based authentication: the account context is risky, so the server
+  // demands step-up MFA before issuing a token.
+  if (data.mfa_required) return { mfaRequired: true, factors: data.factors || [] }
   setAuth(data.token, data.user)
   return data.user
 }

@@ -35,9 +35,14 @@ class RiskAssessment:
         }
 
 
-def assess(user: User, events: list[Event], model: UebaModel) -> RiskAssessment:
-    """Score one session 0-100 with a human-readable breakdown."""
-    hits = evaluate(user, events)
+def assess(user: User, events: list[Event], model: UebaModel,
+           jit_privileges: set[str] | None = None) -> RiskAssessment:
+    """Score one session 0-100 with a human-readable breakdown.
+
+    `jit_privileges` — resources under an ACTIVE just-in-time grant — are passed
+    through to the rule engine so a sanctioned escalation is not treated as an attack.
+    """
+    hits = evaluate(user, events, jit_privileges=jit_privileges)
     ueba = model.score_session(user, events)
 
     rule_points = min(sum(h.weight for h in hits), RULE_CAP)
@@ -47,6 +52,9 @@ def assess(user: User, events: list[Event], model: UebaModel) -> RiskAssessment:
     score = min(rule_points + ueba_points + peer_points, 100.0)
 
     reasons = [h.reason for h in hits]
+    if jit_privileges and any(e.action_type == "PRIV_CHANGE" and e.resource in jit_privileges
+                              for e in events):
+        reasons.append("privilege change sanctioned by an approved JIT grant")
     reasons.append(ueba.summary)
     if peer_points:
         reasons.append(f"far above {user.role} peer group (x{ueba.peer_deviation:.0f})")

@@ -125,3 +125,34 @@ class VaultItem(Base):
     nonce: Mapped[str] = mapped_column(String(64))
     kem_ciphertext: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class BankAccount(Base):
+    """A customer bank account the employee operates on (the 'real work' side)."""
+
+    __tablename__ = "bank_accounts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    number: Mapped[str] = mapped_column(String(20), unique=True)
+    holder: Mapped[str] = mapped_column(String(128))
+    acc_type: Mapped[str] = mapped_column(String(16))   # Savings / Current / Loan
+    branch: Mapped[str] = mapped_column(String(32))
+    balance: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE")  # ACTIVE/DORMANT/FROZEN
+
+
+class BankTransaction(Base):
+    """A ledger entry / money transfer, with a maker-checker + fraud status."""
+
+    __tablename__ = "bank_transactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    description: Mapped[str] = mapped_column(String(200))
+    from_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    to_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    amount: Mapped[float] = mapped_column(Float)
+    mode: Mapped[str] = mapped_column(String(16))       # NEFT/RTGS/IMPS/UPI/TRANSFER
+    status: Mapped[str] = mapped_column(String(16), default="CLEARED")  # CLEARED/HELD/FLAGGED/REJECTED/BLOCKED
+    maker: Mapped[str] = mapped_column(String(64), default="system")
+    flagged_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)

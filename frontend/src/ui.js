@@ -57,10 +57,10 @@ export const sevMeta = {
 }
 
 export function actionColor(a) {
-  if (/BLOCK/.test(a)) return C.critical
-  if (/MAKER/.test(a)) return C.seriousInk
+  if (/BLOCK|FLAGGED|LOCKED/.test(a)) return C.critical
+  if (/MAKER|HELD/.test(a)) return C.seriousInk
   if (/MFA/.test(a)) return C.warnInk
-  if (/VERIFIED|ALLOW/.test(a)) return C.good
+  if (/VERIFIED|ALLOW|APPROVED/.test(a)) return C.good
   return C.muted
 }
 

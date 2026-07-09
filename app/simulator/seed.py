@@ -5,6 +5,7 @@ Usage: python -m app.simulator.seed [--days 14] [--fresh]
 import argparse
 import os
 
+from app.bank import seed_bank
 from app.config import settings
 from app.models.db import SessionLocal, init_db
 from app.simulator.normal import seed_users, simulate_history
@@ -26,7 +27,9 @@ def main() -> None:
     try:
         users = seed_users(db)
         n = simulate_history(db, days=args.days)
-        print(f"Seeded {len(users)} users, {n} events over {args.days} days of history.")
+        seed_bank(db)
+        print(f"Seeded {len(users)} users, {n} events over {args.days} days of history, "
+              "plus bank accounts + ledger.")
     finally:
         db.close()
 

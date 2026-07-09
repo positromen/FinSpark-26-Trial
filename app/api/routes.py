@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as OrmSession
 
+from app import bank
 from app.api.ws import feed_endpoint, manager
 from app.config import settings
 from app.detection import live
@@ -185,6 +186,90 @@ async def portal_logout(user: User = Depends(_employee), db: OrmSession = Depend
         live.close_session(db, sess)
         await _broadcast_presence(user, sess, "logout")
     return {"ok": True}
+
+
+# ======================= CORE BANKING (employee) =======================
+
+class TransferIn(BaseModel):
+    from_number: str
+    to_number: str
+    amount: float
+    mode: str = "NEFT"
+
+
+def _current_session_risk(db: OrmSession, user: User) -> float:
+    sess = (db.query(Session)
+            .filter(Session.user_id == user.id, Session.status.in_(["ACTIVE", "BLOCKED"]))
+            .order_by(Session.id.desc()).first())
+    return sess.risk_score if sess else 0.0
+
+
+@router.get("/bank/accounts")
+def bank_accounts(user: User = Depends(_employee), db: OrmSession = Depends(get_db)) -> list[dict]:
+    return bank.accounts(db)
+
+
+@router.get("/bank/transactions")
+def bank_transactions(limit: int = 30, user: User = Depends(_employee),
+                      db: OrmSession = Depends(get_db)) -> list[dict]:
+    return bank.transactions(db, limit=limit)
+
+
+@router.get("/bank/pending")
+def bank_pending(user: User = Depends(_employee), db: OrmSession = Depends(get_db)) -> list[dict]:
+    return bank.pending(db)
+
+
+@router.get("/bank/beneficiaries")
+def bank_beneficiaries(user: User = Depends(_employee), db: OrmSession = Depends(get_db)) -> list[dict]:
+    return bank.beneficiaries(db)
+
+
+@router.post("/bank/transfer")
+async def bank_transfer(body: TransferIn, user: User = Depends(_employee),
+                        db: OrmSession = Depends(get_db)) -> dict:
+    try:
+        result = bank.transfer(db, body.from_number, body.to_number, body.amount,
+                               body.mode, user.username,
+                               session_risk=_current_session_risk(db, user))
+    except bank.TransferError as e:
+        raise HTTPException(400, str(e))
+    # A held / flagged transfer raises a SOC alert and flashes both screens.
+    if result["alert"]:
+        a = result["alert"]
+        db.add(Alert(user_id=user.id, session_id=None, severity=a["severity"],
+                     action_taken=a["action"], insider_type=None,
+                     message="Banking: " + a["text"]))
+        db.commit()
+        audit.append_entry(db, actor="core-banking", action=f"TXN_{a['action']}",
+                           payload=a["text"])
+        await manager.broadcast({"type": "alert", "user": user.username, "role": user.role,
+                                 "severity": a["severity"], "action": a["action"],
+                                 "score": round(_current_session_risk(db, user), 1),
+                                 "insider_type": None, "reasons": [a["text"]]})
+    return result
+
+
+@router.post("/bank/transactions/{tx_id}/approve")
+async def bank_tx_approve(tx_id: int, user: User = Depends(_employee),
+                          db: OrmSession = Depends(get_db)) -> dict:
+    try:
+        r = bank.approve(db, tx_id, user.username)
+    except bank.TransferError as e:
+        raise HTTPException(400, str(e))
+    audit.append_entry(db, actor=user.username, action="TXN_APPROVED", payload=f"tx={tx_id}")
+    return r
+
+
+@router.post("/bank/transactions/{tx_id}/reject")
+async def bank_tx_reject(tx_id: int, user: User = Depends(_employee),
+                         db: OrmSession = Depends(get_db)) -> dict:
+    try:
+        r = bank.reject(db, tx_id)
+    except bank.TransferError as e:
+        raise HTTPException(400, str(e))
+    audit.append_entry(db, actor=user.username, action="TXN_REJECTED", payload=f"tx={tx_id}")
+    return r
 
 
 # ======================= SOC CONSOLE (analyst only) =======================

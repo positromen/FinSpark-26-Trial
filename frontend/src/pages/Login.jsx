@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { login } from '../api.js'
 import { C, TYPE } from '../ui.js'
 import Sidebar from '../components/Sidebar.jsx'
+import Logo from '../components/Logo.jsx'
 
 const DEMO = [
   { id: 'soc_admin', desc: 'SOC analyst — the console', color: '#1d4ed8' },
@@ -31,10 +32,7 @@ export default function Login({ onLogin }) {
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px 20px' }}>
           <div style={{ width: 420, maxWidth: '100%' }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, marginBottom: 26 }}>
-              <div style={{ width: 58, height: 58, borderRadius: 14, background: 'linear-gradient(180deg,#1d4370,#14304f)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 20px rgba(20,48,79,.25)' }}>
-                <div style={{ width: 22, height: 22, background: '#fff', transform: 'rotate(45deg)', borderRadius: 4 }} />
-              </div>
+              <Logo size={62} />
               <div style={{ fontSize: 25, fontWeight: 700, letterSpacing: 5, color: C.navy }}>PRAHARI</div>
               <div style={{ fontSize: 12.5, color: C.muted, letterSpacing: .5 }}>Privileged-Access Insider-Threat Detection</div>
             </div>

@@ -1,4 +1,5 @@
 import { C, initials } from '../ui.js'
+import Logo from './Logo.jsx'
 
 // Contextual left navigation. `groups` = [{title, items:[{label,icon,active,onClick,badge,badgeBg}]}].
 export default function Sidebar({ kicker, user, groups, onSignOut }) {
@@ -6,10 +7,7 @@ export default function Sidebar({ kicker, user, groups, onSignOut }) {
     <div className="sidebar">
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '18px 16px 15px',
                     borderBottom: '1px solid rgba(255,255,255,.09)' }}>
-        <div style={{ width: 34, height: 34, borderRadius: 8, background: C.accent, flex: 'none',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ width: 14, height: 14, background: '#fff', transform: 'rotate(45deg)', borderRadius: 3 }} />
-        </div>
+        <Logo size={36} />
         <div>
           <div style={{ fontWeight: 700, letterSpacing: 2.5, fontSize: 14, color: '#fff' }}>PRAHARI</div>
           <div className="side-kicker">{kicker}</div>

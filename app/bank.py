@@ -12,7 +12,17 @@ from sqlalchemy.orm import Session as OrmSession
 
 from app.models.entities import BankAccount, BankTransaction
 
-HIGH_VALUE = 200000.0   # transfers above this need a second approver (maker-checker)
+HIGH_VALUE = 200000.0    # > this needs a second approver (maker-checker HELD)
+FRAUD_VALUE = 1000000.0  # >= this is auto-FLAGGED for fraud review (blocked pending)
+
+# External payees the portal offers. The watchlisted one triggers a fraud FLAG.
+EXTERNAL_BENEFICIARIES = [
+    {"number": "50200000112233", "name": "Sunrise Suppliers (external)", "watchlist": False},
+    {"number": "50200000445566", "name": "Payroll Bulk Account (external)", "watchlist": False},
+    {"number": "59990000001111", "name": "QuickCash Holdings", "watchlist": True},
+]
+_BENE = {b["number"]: b for b in EXTERNAL_BENEFICIARIES}
+SUSPICIOUS = {b["number"] for b in EXTERNAL_BENEFICIARIES if b["watchlist"]}
 
 SEED_ACCOUNTS = [
     ("50100000004821", "Aarti Deshpande", "Savings", "Fort", 245600.0, "ACTIVE"),
@@ -78,47 +88,87 @@ def pending(db: OrmSession) -> list[dict]:
 def _tx_dict(t: BankTransaction) -> dict:
     return {"id": t.id, "t": t.timestamp.isoformat(), "description": t.description,
             "from": mask(t.from_number), "to": mask(t.to_number), "amount": t.amount,
-            "mode": t.mode, "status": t.status, "maker": t.maker}
+            "mode": t.mode, "status": t.status, "maker": t.maker,
+            "flagged_reason": t.flagged_reason}
+
+
+def beneficiaries(db: OrmSession) -> list[dict]:
+    """Payees the transfer form offers: internal accounts + external beneficiaries."""
+    internal = [{"number": a.number, "name": a.holder, "kind": "internal"}
+                for a in db.query(BankAccount).order_by(BankAccount.id).all()]
+    external = [{"number": b["number"], "name": b["name"], "kind": "external",
+                 "watchlist": b["watchlist"]} for b in EXTERNAL_BENEFICIARIES]
+    return internal + external
 
 
 class TransferError(Exception):
     pass
 
 
+def _payee_name(db: OrmSession, number: str) -> str:
+    dst = _acct(db, number)
+    if dst:
+        return dst.holder
+    return _BENE.get(number, {}).get("name", "External beneficiary")
+
+
 def transfer(db: OrmSession, from_number: str, to_number: str, amount: float,
-             mode: str, maker: str) -> dict:
-    """Move funds between accounts. High-value transfers are held for approval."""
+             mode: str, maker: str, session_risk: float = 0.0) -> dict:
+    """Move funds. High-value → maker-checker HELD; suspicious → fraud FLAGGED.
+
+    Returns {status, message, transaction, alert}. `alert` (or None) tells the
+    caller to raise a SOC alert + flash the screens for HELD/FLAGGED outcomes.
+    """
     if amount <= 0:
         raise TransferError("Amount must be greater than zero.")
     if from_number == to_number:
         raise TransferError("Source and destination accounts must differ.")
     src = _acct(db, from_number)
-    dst = _acct(db, to_number)
-    if src is None or dst is None:
-        raise TransferError("Account not found.")
+    if src is None:
+        raise TransferError("Source account not found.")
     if src.status != "ACTIVE":
         raise TransferError(f"Source account is {src.status} — cannot debit.")
-    if dst.status == "FROZEN":
+    dst = _acct(db, to_number)  # None = external beneficiary
+    if dst is not None and dst.status == "FROZEN":
         raise TransferError("Destination account is FROZEN — cannot credit.")
     if amount > src.balance and src.acc_type != "Loan":
         raise TransferError("Insufficient balance.")
 
-    desc = f"{mode} transfer · {src.holder} → {dst.holder}"
-    if amount > HIGH_VALUE:
-        tx = BankTransaction(description=desc, from_number=from_number, to_number=to_number,
-                             amount=amount, mode=mode, status="HELD", maker=maker)
-        db.add(tx)
-        db.commit()
-        return {"status": "HELD", "transaction": _tx_dict(tx),
-                "message": f"₹{amount:,.0f} exceeds the ₹{HIGH_VALUE:,.0f} maker-checker "
-                           "limit — held for a second approver."}
-    _settle(src, dst, amount)
+    payee = _payee_name(db, to_number)
+    desc = f"{mode} transfer · {src.holder} → {payee}"
+
+    # decide the outcome (fraud checks first, then the high-value hold)
+    status, reason = "CLEARED", None
+    if to_number in SUSPICIOUS:
+        status, reason = "FLAGGED", "beneficiary on the fraud watchlist"
+    elif amount >= FRAUD_VALUE:
+        status, reason = "FLAGGED", f"unusually large transfer (₹{amount:,.0f})"
+    elif session_risk >= 70:
+        status, reason = "FLAGGED", f"initiated from a high-risk privileged session (score {session_risk:.0f})"
+    elif amount > HIGH_VALUE:
+        status, reason = "HELD", f"exceeds the ₹{HIGH_VALUE:,.0f} maker-checker limit"
+
+    if status == "CLEARED":
+        _settle(src, dst, amount)   # money moves only when cleared
+
     tx = BankTransaction(description=desc, from_number=from_number, to_number=to_number,
-                         amount=amount, mode=mode, status="CLEARED", maker=maker)
+                         amount=amount, mode=mode, status=status, maker=maker,
+                         flagged_reason=reason)
     db.add(tx)
     db.commit()
-    return {"status": "CLEARED", "transaction": _tx_dict(tx),
-            "message": f"₹{amount:,.0f} transferred and cleared."}
+
+    messages = {
+        "CLEARED": f"₹{amount:,.0f} transferred to {payee} and cleared.",
+        "HELD": f"₹{amount:,.0f} to {payee} — {reason}. Held for a second approver.",
+        "FLAGGED": f"⚠ ₹{amount:,.0f} to {payee} FLAGGED as suspected fraud — {reason}. "
+                   "Money held; SOC alerted.",
+    }
+    alert = None
+    if status in ("HELD", "FLAGGED"):
+        alert = {"severity": "CRITICAL" if status == "FLAGGED" else "WARNING",
+                 "action": status,
+                 "text": f"{maker}: {mode} ₹{amount:,.0f} to {payee} — {status} ({reason})"}
+    return {"status": status, "message": messages[status], "transaction": _tx_dict(tx), "alert": alert}
 
 
 def approve(db: OrmSession, tx_id: int, approver: str) -> dict:

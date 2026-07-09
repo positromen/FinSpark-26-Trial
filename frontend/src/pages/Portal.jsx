@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { getJSON, postJSON } from '../api.js'
 import { C, TYPE, scoreColor, riskLabel, fmt } from '../ui.js'
 import Sidebar from '../components/Sidebar.jsx'
@@ -12,32 +12,16 @@ const ACTIONS = [
   { key: 'DB_EXPORT', label: 'Bulk export', rec: true },
 ]
 const TITLES = { dashboard: 'Dashboard', console: 'Action Console', accounts: 'Customer Accounts',
-  transactions: 'Transaction Ledger', approvals: 'Approvals', risk: 'My Session Risk', activity: 'Session Activity Log' }
+  payments: 'Payments & Transfers', transactions: 'Transaction Ledger', approvals: 'Approvals',
+  risk: 'My Session Risk', activity: 'Session Activity Log' }
 const USER_TYPE = { ext_dsouza: 'malicious', ext_rao: 'negligent' }
-
-// static banking-ops mock content (design flourish — the "real work" staff do while Prahari watches)
-const TX = [
-  { time: '09:32', desc: 'NEFT outward · vendor payout', acct: 'AC••••7735', amt: '₹ 1,20,000', out: true, status: 'CLEARED', sc: C.good },
-  { time: '09:15', desc: 'IMPS inward · salary credit', acct: 'AC••••4821', amt: '₹ 8,500', out: false, status: 'CLEARED', sc: C.good },
-  { time: '08:58', desc: 'RTGS outward · settlement', acct: 'AC••••7735', amt: '₹ 5,00,000', out: true, status: 'PENDING', sc: C.seriousInk },
-  { time: '08:41', desc: 'UPI collect · merchant', acct: 'AC••••4821', amt: '₹ 2,240', out: false, status: 'CLEARED', sc: C.good },
-  { time: '08:22', desc: 'Cheque clearing · inward', acct: 'AC••••3357', amt: '₹ 45,000', out: false, status: 'CLEARED', sc: C.good },
-  { time: '08:05', desc: 'Standing instruction · EMI', acct: 'AC••••9042', amt: '₹ 32,100', out: true, status: 'CLEARED', sc: C.good },
-]
-const ACCTS = [
-  { acct: 'AC ••••4821', type: 'Savings', bal: '₹ 2,45,600', branch: 'Fort', status: 'ACTIVE', sc: C.good },
-  { acct: 'AC ••••7735', type: 'Current', bal: '₹ 18,90,200', branch: 'BKC', status: 'ACTIVE', sc: C.good },
-  { acct: 'AC ••••1188', type: 'Savings', bal: '₹ 76,540', branch: 'Andheri', status: 'DORMANT', sc: C.warnInk },
-  { acct: 'AC ••••9042', type: 'Loan', bal: '₹ -4,20,000', branch: 'Fort', status: 'ACTIVE', sc: C.good },
-  { acct: 'AC ••••3357', type: 'Current', bal: '₹ 9,12,780', branch: 'Pune', status: 'FROZEN', sc: C.critical },
-]
-const APPROVALS = [
-  { icon: '⚙', ib: 'rgba(57,135,229,.12)', if_: '#1d4ed8', title: 'Config change on core-banking-db · replica lag threshold', maker: 'rmehta', time: '09:48', status: 'AWAITING' },
-  { icon: '↥', ib: 'rgba(192,86,33,.12)', if_: C.seriousInk, title: 'Bulk export 2,000 records · report-server', maker: 'ext_rao', time: '19:03', status: 'HELD' },
-  { icon: '⚿', ib: 'rgba(14,122,14,.1)', if_: C.good, title: 'Privilege grant · OPS read-only on loans-db', maker: 'nshinde', time: '08:30', status: 'AWAITING' },
-]
+const MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'TRANSFER']
 
 const T = (s) => new Date(s).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+const rupee = (n) => '₹ ' + Number(n).toLocaleString('en-IN')
+const TXCOLOR = { CLEARED: C.good, HELD: C.seriousInk, FLAGGED: C.critical, BLOCKED: C.critical,
+  REJECTED: C.muted2, PENDING: C.seriousInk }
+const ACCTCOLOR = { ACTIVE: C.good, DORMANT: C.warnInk, FROZEN: C.critical }
 
 export default function Portal({ user, onLogout }) {
   const [boot, setBoot] = useState(null)
@@ -49,6 +33,10 @@ export default function Portal({ user, onLogout }) {
   const [mfaCode, setMfaCode] = useState('')
   const [pending, setPending] = useState(null)  // action awaiting MFA
   const [busy, setBusy] = useState(false)
+  const [bank, setBank] = useState({ accounts: [], transactions: [], pending: [], beneficiaries: [] })
+  const [xfer, setXfer] = useState({ from: '', to: '', amount: 100000, mode: 'NEFT' })
+  const [txResult, setTxResult] = useState(null)   // {status, message}
+  const [txBusy, setTxBusy] = useState(false)
 
   useEffect(() => {
     postJSON('/portal/bootstrap').then((b) => {
@@ -56,6 +44,36 @@ export default function Portal({ user, onLogout }) {
       setTarget(b.my_resources[0] || b.all_resources[0]?.name || '')
     }).catch(console.error)
   }, [])
+
+  const loadBank = useCallback(async () => {
+    try {
+      const [accounts, transactions, pend, beneficiaries] = await Promise.all([
+        getJSON('/bank/accounts'), getJSON('/bank/transactions'),
+        getJSON('/bank/pending'), getJSON('/bank/beneficiaries'),
+      ])
+      setBank({ accounts, transactions, pending: pend, beneficiaries })
+      setXfer((x) => ({
+        ...x,
+        from: x.from || accounts[0]?.number || '',
+        to: x.to || beneficiaries.find((b) => b.kind === 'external')?.number || accounts[1]?.number || '',
+      }))
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => { loadBank() }, [loadBank])
+  useEffect(() => { const t = setInterval(loadBank, 5000); return () => clearInterval(t) }, [loadBank])
+
+  const doTransfer = async () => {
+    setTxBusy(true); setTxResult(null)
+    try {
+      const r = await postJSON('/bank/transfer', { from_number: xfer.from, to_number: xfer.to,
+        amount: Number(xfer.amount), mode: xfer.mode })
+      setTxResult({ status: r.status, message: r.message })
+    } catch (e) { setTxResult({ status: 'ERROR', message: e.message }) }
+    finally { setTxBusy(false); loadBank() }
+  }
+  const approveTx = async (id) => { try { await postJSON(`/bank/transactions/${id}/approve`) } finally { loadBank() } }
+  const rejectTx = async (id) => { try { await postJSON(`/bank/transactions/${id}/reject`) } finally { loadBank() } }
 
   // Keep the live gauge / activity / block state fresh without clicking.
   useEffect(() => {
@@ -111,8 +129,10 @@ export default function Portal({ user, onLogout }) {
     ] },
     { title: 'BANKING OPS', items: [
       { label: 'Customer Accounts', icon: '⊞', active: section === 'accounts', onClick: () => setSection('accounts') },
+      { label: 'Payments & Transfers', icon: '⇅', active: section === 'payments', onClick: () => setSection('payments') },
       { label: 'Transactions', icon: '⇄', active: section === 'transactions', onClick: () => setSection('transactions') },
-      { label: 'Approvals', icon: '✓', active: section === 'approvals', onClick: () => setSection('approvals'), badge: '3', badgeBg: C.seriousInk },
+      { label: 'Approvals', icon: '✓', active: section === 'approvals', onClick: () => setSection('approvals'),
+        badge: bank.pending.length ? String(bank.pending.length) : '', badgeBg: C.seriousInk },
     ] },
     { title: 'SECURITY', items: [
       { label: 'Session Risk', icon: '◔', active: section === 'risk', onClick: () => setSection('risk') },
@@ -159,13 +179,28 @@ export default function Portal({ user, onLogout }) {
             </div>
           )}
 
-          {section === 'dashboard' && <Dashboard score={score} events={session?.events || []} onConsole={() => setSection('console')} />}
+          {txResult && (txResult.status === 'FLAGGED' || txResult.status === 'HELD') && (
+            <div className="flash" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16,
+                          borderRadius: 9, padding: '12px 15px',
+                          border: `1px solid ${txResult.status === 'FLAGGED' ? C.critical : C.serious}`,
+                          background: txResult.status === 'FLAGGED' ? 'rgba(192,38,38,.08)' : 'rgba(250,178,25,.12)' }}>
+              <span style={{ fontSize: 16 }}>{txResult.status === 'FLAGGED' ? '⛔' : '⏸'}</span>
+              <div style={{ fontSize: 13, fontWeight: 700, color: txResult.status === 'FLAGGED' ? C.critical : C.warnInk }}>
+                {txResult.status === 'FLAGGED' ? 'TRANSACTION FLAGGED AS SUSPECTED FRAUD' : 'TRANSACTION HELD FOR SECOND APPROVER'}
+              </div>
+              <div style={{ fontSize: 12.5, color: C.ink3 }}>{txResult.message}</div>
+              <button className="btn" style={{ marginLeft: 'auto', background: 'none', color: C.muted2, fontSize: 15, padding: '2px 6px' }} onClick={() => setTxResult(null)}>✕</button>
+            </div>
+          )}
+
+          {section === 'dashboard' && <Dashboard score={score} events={session?.events || []} bank={bank} onGo={setSection} />}
           {section === 'console' && (
             <Console {...{ target, setTarget, myRes, otherRes, records, setRecords, run, busy, blocked, result, score }} />
           )}
-          {section === 'accounts' && <Accounts />}
-          {section === 'transactions' && <Transactions />}
-          {section === 'approvals' && <Approvals />}
+          {section === 'accounts' && <Accounts accounts={bank.accounts} />}
+          {section === 'payments' && <Payments {...{ xfer, setXfer, bank, doTransfer, txBusy, txResult }} />}
+          {section === 'transactions' && <Transactions transactions={bank.transactions} />}
+          {section === 'approvals' && <Approvals pending={bank.pending} approveTx={approveTx} rejectTx={rejectTx} />}
           {section === 'risk' && <RiskPage score={score} />}
           {section === 'activity' && <Activity events={session?.events || []} />}
         </div>
@@ -236,25 +271,31 @@ function Kpi({ label, value, sub, color }) {
   )
 }
 
-function Dashboard({ score, events, onConsole }) {
+function Dashboard({ score, events, bank, onGo }) {
   const queries = 42 + events.filter((e) => e.action === 'DB_QUERY' || e.action === 'DB_EXPORT').length
+  const totalDeposits = bank.accounts.filter((a) => a.balance > 0).reduce((s, a) => s + a.balance, 0)
+  const recent = bank.transactions.slice(0, 4)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,minmax(0,1fr))', gap: 12 }}>
-        <Kpi label="ACCOUNTS MANAGED" value="1,284" sub="across 4 branches" color={C.navy} />
-        <Kpi label="PENDING APPROVALS" value="3" sub="awaiting checker" color={C.seriousInk} />
-        <Kpi label="QUERIES TODAY" value={String(queries)} sub="this session included" color={C.navy} />
+        <Kpi label="ACCOUNTS MANAGED" value={String(bank.accounts.length)} sub="customer accounts" color={C.navy} />
+        <Kpi label="PENDING APPROVALS" value={String(bank.pending.length)} sub="held for checker" color={bank.pending.length ? C.seriousInk : C.navy} />
+        <Kpi label="DEPOSITS ON BOOK" value={rupee(Math.round(totalDeposits))} sub="across active accounts" color={C.navy} />
         <Kpi label="SESSION RISK" value={String(Math.round(score))} sub={riskLabel(score)} color={scoreColor(score)} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.5fr) minmax(0,1fr)', gap: 16, alignItems: 'start' }}>
         <div className="card card-pad">
-          <div className="label" style={{ marginBottom: 12 }}>RECENT TRANSACTIONS</div>
-          {TX.slice(0, 4).map((t, i) => (
-            <div key={i} className="trow" style={{ display: 'grid', gridTemplateColumns: '52px 1fr auto auto', gap: 12, padding: '9px 0', alignItems: 'center' }}>
-              <span className="mono" style={{ fontSize: 11.5, color: C.muted2 }}>{t.time}</span>
-              <span style={{ fontSize: 12.5, color: C.ink2 }}>{t.desc}</span>
-              <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: t.out ? C.critical : C.good, textAlign: 'right' }}>{t.amt}</span>
-              <span style={{ fontSize: 10.5, fontWeight: 600, color: t.sc }}>{t.status}</span>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+            <div className="label">RECENT TRANSACTIONS</div>
+            <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: '5px 10px', fontSize: 11 }} onClick={() => onGo('payments')}>New transfer →</button>
+          </div>
+          {recent.length === 0 && <div style={{ fontSize: 12, color: C.muted2, padding: '8px 0' }}>No transactions yet.</div>}
+          {recent.map((t) => (
+            <div key={t.id} className="trow" style={{ display: 'grid', gridTemplateColumns: '52px 1fr auto auto', gap: 12, padding: '9px 0', alignItems: 'center' }}>
+              <span className="mono" style={{ fontSize: 11.5, color: C.muted2 }}>{T(t.t)}</span>
+              <span style={{ fontSize: 12.5, color: C.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.description}</span>
+              <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, textAlign: 'right' }}>{rupee(Math.round(t.amount))}</span>
+              <span style={{ fontSize: 10.5, fontWeight: 600, color: TXCOLOR[t.status] || C.muted }}>{t.status}</span>
             </div>
           ))}
         </div>
@@ -262,7 +303,7 @@ function Dashboard({ score, events, onConsole }) {
           <div className="label" style={{ alignSelf: 'flex-start' }}>LIVE SESSION RISK</div>
           <Gauge score={score} size={120} />
           <div style={{ fontSize: 14, fontWeight: 700, color: scoreColor(score) }}>{riskLabel(score)}</div>
-          <button className="btn btn-navy" style={{ alignSelf: 'stretch', padding: 9, fontSize: 12 }} onClick={onConsole}>Open Action Console →</button>
+          <button className="btn btn-navy" style={{ alignSelf: 'stretch', padding: 9, fontSize: 12 }} onClick={() => onGo('console')}>Open Action Console →</button>
         </div>
       </div>
     </div>
@@ -317,20 +358,21 @@ function Console({ target, setTarget, myRes, otherRes, records, setRecords, run,
   )
 }
 
-function Accounts() {
+function Accounts({ accounts }) {
   return (
     <div className="card card-pad">
-      <div className="label" style={{ marginBottom: 12 }}>CUSTOMER ACCOUNTS · MASKED</div>
+      <div className="label" style={{ marginBottom: 12 }}>CUSTOMER ACCOUNTS · MASKED · LIVE BALANCES</div>
       <div className="scroll-x"><div style={{ minWidth: 560 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr .8fr 1fr .8fr auto', gap: 12, padding: '4px 8px', fontSize: 10, letterSpacing: .8, color: C.muted3, fontWeight: 600 }}>
-          <span>ACCOUNT</span><span>TYPE</span><span style={{ textAlign: 'right' }}>BALANCE</span><span>BRANCH</span><span>STATUS</span></div>
-        {ACCTS.map((a, i) => (
-          <div key={i} className="trow" style={{ display: 'grid', gridTemplateColumns: '1.2fr .8fr 1fr .8fr auto', gap: 12, padding: '10px 8px', alignItems: 'center' }}>
-            <span className="mono" style={{ fontSize: 12.5, color: C.ink2 }}>{a.acct}</span>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1.4fr .8fr 1fr .8fr auto', gap: 12, padding: '4px 8px', fontSize: 10, letterSpacing: .8, color: C.muted3, fontWeight: 600 }}>
+          <span>ACCOUNT</span><span>HOLDER</span><span>TYPE</span><span style={{ textAlign: 'right' }}>BALANCE</span><span>BRANCH</span><span>STATUS</span></div>
+        {accounts.map((a) => (
+          <div key={a.number} className="trow" style={{ display: 'grid', gridTemplateColumns: '1.3fr 1.4fr .8fr 1fr .8fr auto', gap: 12, padding: '10px 8px', alignItems: 'center' }}>
+            <span className="mono" style={{ fontSize: 12.5, color: C.ink2 }}>{a.masked}</span>
+            <span style={{ fontSize: 12, color: C.ink3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.holder}</span>
             <span style={{ fontSize: 12, color: C.muted }}>{a.type}</span>
-            <span className="mono" style={{ fontSize: 12.5, color: C.ink, textAlign: 'right' }}>{a.bal}</span>
+            <span className="mono" style={{ fontSize: 12.5, color: a.balance < 0 ? C.critical : C.ink, textAlign: 'right' }}>{rupee(Math.round(a.balance))}</span>
             <span style={{ fontSize: 12, color: C.muted }}>{a.branch}</span>
-            <span style={{ fontSize: 10.5, fontWeight: 600, color: a.sc }}>{a.status}</span>
+            <span style={{ fontSize: 10.5, fontWeight: 600, color: ACCTCOLOR[a.status] || C.muted }}>{a.status}</span>
           </div>
         ))}
       </div></div>
@@ -338,20 +380,93 @@ function Accounts() {
   )
 }
 
-function Transactions() {
+function Payments({ xfer, setXfer, bank, doTransfer, txBusy, txResult }) {
+  const active = bank.accounts.filter((a) => a.status === 'ACTIVE')
+  const src = bank.accounts.find((a) => a.number === xfer.from)
+  const big = Number(xfer.amount) > 200000
+  const set = (k) => (e) => setXfer((x) => ({ ...x, [k]: e.target.value }))
+  const band = txResult && (txResult.status === 'CLEARED' ? { fg: C.good, bd: 'rgba(14,122,14,.35)', bg: 'rgba(14,122,14,.06)', icon: '✓' }
+    : txResult.status === 'HELD' ? { fg: C.seriousInk, bd: 'rgba(192,86,33,.4)', bg: 'rgba(192,86,33,.06)', icon: '⏸' }
+    : txResult.status === 'FLAGGED' ? { fg: C.critical, bd: 'rgba(192,38,38,.4)', bg: 'rgba(192,38,38,.06)', icon: '⛔' }
+    : { fg: C.critical, bd: 'rgba(192,38,38,.4)', bg: 'rgba(192,38,38,.06)', icon: '✕' })
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.2fr) minmax(0,1fr)', gap: 16, alignItems: 'start' }}>
+      <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div className="label">FUND TRANSFER</div>
+        <label className="field">From account
+          <select className="select mono" value={xfer.from} onChange={set('from')} style={{ fontSize: 13 }}>
+            {active.map((a) => <option key={a.number} value={a.number}>{a.masked} · {a.holder} · {rupee(Math.round(a.balance))}</option>)}
+          </select>
+        </label>
+        <label className="field">Beneficiary
+          <select className="select mono" value={xfer.to} onChange={set('to')} style={{ fontSize: 13 }}>
+            <optgroup label="Internal accounts">
+              {bank.beneficiaries.filter((b) => b.kind === 'internal').map((b) => <option key={b.number} value={b.number}>{b.name}</option>)}
+            </optgroup>
+            <optgroup label="External beneficiaries">
+              {bank.beneficiaries.filter((b) => b.kind === 'external').map((b) => <option key={b.number} value={b.number}>{b.name}{b.watchlist ? ' ⚠' : ''}</option>)}
+            </optgroup>
+          </select>
+        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px', gap: 10 }}>
+          <label className="field">Amount (₹)
+            <input className="input mono" type="number" min="1" value={xfer.amount} onChange={set('amount')} />
+          </label>
+          <label className="field">Mode
+            <select className="select" value={xfer.mode} onChange={set('mode')} style={{ fontSize: 13 }}>
+              {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </label>
+        </div>
+        {big && <div style={{ fontSize: 11.5, color: C.warnInk }}>ⓘ Above ₹2,00,000 — this will be held for a second approver (maker-checker).</div>}
+        <button className="btn btn-navy" disabled={txBusy || !xfer.from || !xfer.to} onClick={doTransfer}>
+          {txBusy ? 'Processing…' : `Transfer ${rupee(Number(xfer.amount) || 0)}`}
+        </button>
+        {txResult && (
+          <div style={{ borderRadius: 9, padding: '12px 14px', border: `1px solid ${band.bd}`, background: band.bg }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: band.fg }}>{band.icon} {txResult.status}</div>
+            <div style={{ fontSize: 12, color: C.ink3, marginTop: 3 }}>{txResult.message}</div>
+          </div>
+        )}
+      </div>
+      <div className="card card-pad">
+        <div className="label" style={{ marginBottom: 10 }}>SOURCE ACCOUNT</div>
+        {src ? (
+          <div>
+            <div className="mono" style={{ fontSize: 15, fontWeight: 600, color: C.navy }}>{src.masked}</div>
+            <div style={{ fontSize: 12.5, color: C.ink3, marginTop: 2 }}>{src.holder} · {src.type} · {src.branch}</div>
+            <div className="mono" style={{ fontSize: 26, fontWeight: 700, color: src.balance < 0 ? C.critical : C.ink, marginTop: 12 }}>{rupee(Math.round(src.balance))}</div>
+            <div style={{ fontSize: 11, color: C.muted2 }}>available balance</div>
+          </div>
+        ) : <div style={{ fontSize: 12, color: C.muted2 }}>Select a source account.</div>}
+        <div style={{ marginTop: 16, fontSize: 11.5, color: C.muted, lineHeight: 1.6 }}>
+          <b>Controls:</b> transfers over ₹2,00,000 are held for maker-checker; very large transfers
+          or payments to a watch-listed beneficiary (⚠) are flagged as suspected fraud, held, and the
+          SOC is alerted instantly.
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Transactions({ transactions }) {
   return (
     <div className="card card-pad">
-      <div className="label" style={{ marginBottom: 12 }}>TRANSACTION LEDGER · TODAY</div>
-      <div className="scroll-x"><div style={{ minWidth: 560 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '56px 1fr 1fr auto auto', gap: 12, padding: '4px 8px', fontSize: 10, letterSpacing: .8, color: C.muted3, fontWeight: 600 }}>
-          <span>TIME</span><span>DESCRIPTION</span><span>ACCOUNT</span><span style={{ textAlign: 'right' }}>AMOUNT</span><span>STATUS</span></div>
-        {TX.map((t, i) => (
-          <div key={i} className="trow" style={{ display: 'grid', gridTemplateColumns: '56px 1fr 1fr auto auto', gap: 12, padding: '10px 8px', alignItems: 'center' }}>
-            <span className="mono" style={{ fontSize: 11.5, color: C.muted2 }}>{t.time}</span>
-            <span style={{ fontSize: 12.5, color: C.ink2 }}>{t.desc}</span>
-            <span className="mono" style={{ fontSize: 12, color: C.muted }}>{t.acct}</span>
-            <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: t.out ? C.critical : C.good, textAlign: 'right' }}>{t.amt}</span>
-            <span style={{ fontSize: 10.5, fontWeight: 600, color: t.sc }}>{t.status}</span>
+      <div className="label" style={{ marginBottom: 12 }}>TRANSACTION LEDGER · LIVE</div>
+      <div className="scroll-x"><div style={{ minWidth: 620 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '56px 1fr 96px 96px auto auto', gap: 12, padding: '4px 8px', fontSize: 10, letterSpacing: .8, color: C.muted3, fontWeight: 600 }}>
+          <span>TIME</span><span>DESCRIPTION</span><span>FROM</span><span>TO</span><span style={{ textAlign: 'right' }}>AMOUNT</span><span>STATUS</span></div>
+        {transactions.length === 0 && <div style={{ fontSize: 12, color: C.muted2, padding: '8px' }}>No transactions.</div>}
+        {transactions.map((t) => (
+          <div key={t.id} className="trow" style={{ display: 'grid', gridTemplateColumns: '56px 1fr 96px 96px auto auto', gap: 12, padding: '10px 8px', alignItems: 'center' }}>
+            <span className="mono" style={{ fontSize: 11.5, color: C.muted2 }}>{T(t.t)}</span>
+            <span style={{ fontSize: 12.5, color: C.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {t.description}{t.flagged_reason ? <span style={{ color: C.critical }}> · {t.flagged_reason}</span> : ''}
+            </span>
+            <span className="mono" style={{ fontSize: 11.5, color: C.muted }}>{t.from}</span>
+            <span className="mono" style={{ fontSize: 11.5, color: C.muted }}>{t.to}</span>
+            <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, textAlign: 'right' }}>{rupee(Math.round(t.amount))}</span>
+            <span style={{ fontSize: 10.5, fontWeight: 600, color: TXCOLOR[t.status] || C.muted }}>{t.status}</span>
           </div>
         ))}
       </div></div>
@@ -359,22 +474,23 @@ function Transactions() {
   )
 }
 
-function Approvals() {
+function Approvals({ pending, approveTx, rejectTx }) {
   return (
     <div className="card card-pad">
-      <div className="label" style={{ marginBottom: 12 }}>MAKER-CHECKER QUEUE · AWAITING SECOND APPROVER</div>
+      <div className="label" style={{ marginBottom: 12 }}>MAKER-CHECKER QUEUE · HELD TRANSACTIONS AWAITING A SECOND APPROVER</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {APPROVALS.map((a, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 14, border: `1px solid ${C.ring}`, borderRadius: 9, padding: '12px 14px' }}>
-            <span style={{ width: 34, height: 34, borderRadius: 8, background: a.ib, color: a.if_, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, flex: 'none' }}>{a.icon}</span>
+        {pending.length === 0 && <div style={{ fontSize: 12.5, color: C.muted2, padding: '8px 0' }}>Nothing pending — no held transactions.</div>}
+        {pending.map((t) => (
+          <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 14, border: `1px solid ${C.ring}`, borderRadius: 9, padding: '12px 14px' }}>
+            <span style={{ width: 34, height: 34, borderRadius: 8, background: 'rgba(192,86,33,.12)', color: C.seriousInk, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, flex: 'none' }}>⏸</span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{a.title}</div>
-              <div style={{ fontSize: 11.5, color: C.muted2, marginTop: 2 }}>maker {a.maker} · {a.time}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{t.description} · {rupee(Math.round(t.amount))}</div>
+              <div style={{ fontSize: 11.5, color: C.muted2, marginTop: 2 }}>maker {t.maker} · {T(t.t)} · {t.mode} · {t.from} → {t.to}</div>
             </div>
-            <span style={{ fontSize: 10.5, fontWeight: 600, color: C.seriousInk }}>{a.status}</span>
+            <span style={{ fontSize: 10.5, fontWeight: 600, color: C.seriousInk }}>HELD</span>
             <div style={{ display: 'flex', gap: 6 }}>
-              <button className="btn" style={{ background: C.good, color: '#fff', padding: '7px 12px', fontSize: 12 }}>Approve</button>
-              <button className="btn btn-ghost" style={{ padding: '7px 12px', fontSize: 12 }}>Reject</button>
+              <button className="btn" style={{ background: C.good, color: '#fff', padding: '7px 12px', fontSize: 12 }} onClick={() => approveTx(t.id)}>Approve</button>
+              <button className="btn btn-ghost" style={{ padding: '7px 12px', fontSize: 12 }} onClick={() => rejectTx(t.id)}>Reject</button>
             </div>
           </div>
         ))}

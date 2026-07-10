@@ -190,4 +190,6 @@ class BankTransaction(Base):
     mode: Mapped[str] = mapped_column(String(16))       # NEFT/RTGS/IMPS/UPI/TRANSFER
     status: Mapped[str] = mapped_column(String(16), default="CLEARED")  # CLEARED/HELD/FLAGGED/REJECTED/BLOCKED
     maker: Mapped[str] = mapped_column(String(64), default="system")
+    # The second officer who approved/rejected/resolved it (maker-checker: must differ from maker).
+    checker: Mapped[str | None] = mapped_column(String(64), nullable=True)
     flagged_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)

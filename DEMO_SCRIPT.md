@@ -54,7 +54,8 @@ Single laptop: two browser windows side by side works just as well.
 | Login | Who | Use for |
 |---|---|---|
 | `soc_admin` | Meera Nair, SOC analyst | the **SOC Console** |
-| `rmehta` | Rajesh Mehta, DBA | the **normal employee** (banking + JIT + vault) |
+| `rmehta` | Rajesh Mehta, DBA | the **normal employee** / transfer **maker** (banking, JIT, vault) |
+| `dgokhale` | Deepa Gokhale, Officer | the **second officer** / **checker** who approves or clears transfers |
 | `ext_dsouza` | Kevin D'Souza, dormant vendor | the **malicious attacker** (gets MFA-challenged at login) |
 | `ext_rao` | Priya Rao, vendor w/ expired access | the **negligent** case |
 
@@ -78,7 +79,7 @@ Single laptop: two browser windows side by side works just as well.
 | **Customer Accounts** | 6 seeded accounts, masked numbers, live balances, status (one FROZEN) |
 | **Payments & Transfers** | real transfers: ≤ ₹2L **CLEARS** instantly · > ₹2L **HELD** for a second officer · watchlisted payee (⚠), ≥ ₹10L, or session risk ≥ 70 → **FLAGGED** as fraud with a red flash banner + CRITICAL SOC alert |
 | **Transactions** | the live ledger with statuses and fraud reasons |
-| **Approvals** | maker-checker queue — a second officer Approves (money moves) or Rejects |
+| **Approvals** | two queues: **maker-checker** (a *different, authorized* officer Approves→money moves / Rejects) and **fraud review** (an officer Clears a false-positive or Confirms the fraud→blocked). The maker never sees action buttons on their own item — segregation of duties is enforced server-side. |
 
 ### 2.3 Action Console (privileged actions — the detection surface)
 
@@ -143,6 +144,9 @@ On the employee machine, sign in as `ext_dsouza`. The amber challenge appears li
 
 Second employee window: `rmehta` (straight in — trusted). Show the **banking desk**: transfer ₹50,000 → **CLEARED**. Transfer ₹5,00,000 → **HELD for maker-checker**. Pay "QuickCash Holdings ⚠" → red **FRAUD flash** + point at the SOC screen: the CRITICAL alert just landed.
 **"This is a real banking floor. Big money needs two officers; a watch-listed payee stops the money and alerts the SOC in the same second."**
+
+**Segregation of duties (optional 30s):** open **Approvals** as `rmehta` — the held item reads *"you initiated this — another officer must approve"* (no buttons). Sign in as **`dgokhale`** (the officer), open **Approvals**, and **Approve** → money moves and the ledger shows the transfer with a ✓ and the checker's name. In **Fraud review**, the officer **Clears** the flagged QuickCash transfer or **Confirms fraud** (blocked permanently).
+**"The maker can never approve their own transfer. The checker must be a different, authorized officer — and every decision is signed into the audit chain naming both people."**
 
 > **Order matters — do JIT + vault next, the big export last.** Money transfers add no session risk, so rmehta is still "clean" for the access beat. If you run the 1,200-record export *first*, its risk stacks with the escalation and rmehta gets *blocked* before you can show JIT — correct behaviour, wrong demo order.
 

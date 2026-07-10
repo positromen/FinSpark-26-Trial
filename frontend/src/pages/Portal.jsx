@@ -86,8 +86,22 @@ export default function Portal({ user, onLogout }) {
     } catch (e) { setTxResult({ status: 'ERROR', message: e.message }) }
     finally { setTxBusy(false); loadBank() }
   }
-  const approveTx = async (id) => { try { await postJSON(`/bank/transactions/${id}/approve`) } finally { loadBank() } }
-  const rejectTx = async (id) => { try { await postJSON(`/bank/transactions/${id}/reject`) } finally { loadBank() } }
+  const [apprMsg, setApprMsg] = useState(null)  // {ok, text} feedback on the Approvals tab
+  const doApproval = async (path, id) => {
+    setApprMsg(null)
+    try { const r = await postJSON(path, null); setApprMsg({ ok: true, text: `Transfer #${id} → ${r.status}.` }) }
+    catch (e) { setApprMsg({ ok: false, text: e.message }) }
+    finally { loadBank() }
+  }
+  const approveTx = (id) => doApproval(`/bank/transactions/${id}/approve`, id)
+  const rejectTx = (id) => doApproval(`/bank/transactions/${id}/reject`, id)
+  const resolveFraud = async (id, decision) => {
+    setApprMsg(null)
+    try { const r = await postJSON(`/bank/transactions/${id}/resolve-fraud`, { decision })
+      setApprMsg({ ok: decision === 'clear', text: `Flagged transfer #${id} → ${r.status}.` }) }
+    catch (e) { setApprMsg({ ok: false, text: e.message }) }
+    finally { loadBank() }
+  }
 
   // Keep the live gauge / activity / block state fresh without clicking.
   useEffect(() => {
@@ -217,7 +231,8 @@ export default function Portal({ user, onLogout }) {
           {section === 'accounts' && <Accounts accounts={bank.accounts} />}
           {section === 'payments' && <Payments {...{ xfer, setXfer, bank, doTransfer, txBusy, txResult }} />}
           {section === 'transactions' && <Transactions transactions={bank.transactions} />}
-          {section === 'approvals' && <Approvals pending={bank.pending} approveTx={approveTx} rejectTx={rejectTx} />}
+          {section === 'approvals' && <Approvals pending={bank.pending} approveTx={approveTx} rejectTx={rejectTx}
+            resolveFraud={resolveFraud} me={boot.user.username} msg={apprMsg} />}
           {section === 'credentials' && <CredentialDesk creds={creds} reload={loadSecurity} blocked={blocked} />}
           {section === 'jit' && <JitDesk grants={grants} resources={boot.all_resources} reload={loadSecurity} />}
           {section === 'risk' && <RiskPage score={score} />}
@@ -481,6 +496,7 @@ function Transactions({ transactions }) {
             <span className="mono" style={{ fontSize: 11.5, color: C.muted2 }}>{T(t.t)}</span>
             <span style={{ fontSize: 12.5, color: C.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {t.description}{t.flagged_reason ? <span style={{ color: C.critical }}> · {t.flagged_reason}</span> : ''}
+              {t.checker ? <span style={{ color: C.muted2 }}> · ✓ {t.checker}</span> : ''}
             </span>
             <span className="mono" style={{ fontSize: 11.5, color: C.muted }}>{t.from}</span>
             <span className="mono" style={{ fontSize: 11.5, color: C.muted }}>{t.to}</span>
@@ -493,26 +509,84 @@ function Transactions({ transactions }) {
   )
 }
 
-function Approvals({ pending, approveTx, rejectTx }) {
+function Approvals({ pending, approveTx, rejectTx, resolveFraud, me, msg }) {
+  const held = pending.filter((t) => t.status === 'HELD')
+  const flagged = pending.filter((t) => t.status === 'FLAGGED')
   return (
-    <div className="card card-pad">
-      <div className="label" style={{ marginBottom: 12 }}>MAKER-CHECKER QUEUE · HELD TRANSACTIONS AWAITING A SECOND APPROVER</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {pending.length === 0 && <div style={{ fontSize: 12.5, color: C.muted2, padding: '8px 0' }}>Nothing pending — no held transactions.</div>}
-        {pending.map((t) => (
-          <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 14, border: `1px solid ${C.ring}`, borderRadius: 9, padding: '12px 14px' }}>
-            <span style={{ width: 34, height: 34, borderRadius: 8, background: 'rgba(192,86,33,.12)', color: C.seriousInk, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, flex: 'none' }}>⏸</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{t.description} · {rupee(Math.round(t.amount))}</div>
-              <div style={{ fontSize: 11.5, color: C.muted2, marginTop: 2 }}>maker {t.maker} · {T(t.t)} · {t.mode} · {t.from} → {t.to}</div>
-            </div>
-            <span style={{ fontSize: 10.5, fontWeight: 600, color: C.seriousInk }}>HELD</span>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button className="btn" style={{ background: C.good, color: '#fff', padding: '7px 12px', fontSize: 12 }} onClick={() => approveTx(t.id)}>Approve</button>
-              <button className="btn btn-ghost" style={{ padding: '7px 12px', fontSize: 12 }} onClick={() => rejectTx(t.id)}>Reject</button>
-            </div>
-          </div>
-        ))}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {msg && (
+        <div style={{ borderRadius: 9, padding: '10px 14px', fontSize: 12.5, fontWeight: 600,
+                      border: `1px solid ${msg.ok ? C.good : C.critical}`,
+                      background: msg.ok ? 'rgba(14,122,14,.06)' : 'rgba(192,38,38,.06)',
+                      color: msg.ok ? C.good : C.critical }}>
+          {msg.ok ? '✓' : '▲'} {msg.text}
+        </div>
+      )}
+
+      <div className="card card-pad">
+        <div className="label" style={{ marginBottom: 4 }}>MAKER-CHECKER QUEUE · HELD TRANSACTIONS AWAITING A SECOND OFFICER</div>
+        <div style={{ fontSize: 11, color: C.muted2, marginBottom: 12 }}>
+          Segregation of duties: the officer who approves must be <b>different</b> from the maker, and must hold approval authority (Officer or DBA).
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {held.length === 0 && <div style={{ fontSize: 12.5, color: C.muted2, padding: '8px 0' }}>Nothing pending — no held transactions.</div>}
+          {held.map((t) => {
+            const own = t.maker === me
+            return (
+              <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 14, border: `1px solid ${C.ring}`, borderRadius: 9, padding: '12px 14px' }}>
+                <span style={{ width: 34, height: 34, borderRadius: 8, background: 'rgba(192,86,33,.12)', color: C.seriousInk, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, flex: 'none' }}>⏸</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{t.description} · {rupee(Math.round(t.amount))}</div>
+                  <div style={{ fontSize: 11.5, color: C.muted2, marginTop: 2 }}>maker <b>{t.maker}</b> · {T(t.t)} · {t.mode} · {t.from} → {t.to}</div>
+                </div>
+                <span style={{ fontSize: 10.5, fontWeight: 600, color: C.seriousInk }}>HELD</span>
+                {own ? (
+                  <span style={{ fontSize: 11, color: C.warnInk, fontStyle: 'italic', maxWidth: 150, textAlign: 'right' }}>
+                    you initiated this — another officer must approve
+                  </span>
+                ) : (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn" style={{ background: C.good, color: '#fff', padding: '7px 12px', fontSize: 12 }} onClick={() => approveTx(t.id)}>Approve</button>
+                    <button className="btn btn-ghost" style={{ padding: '7px 12px', fontSize: 12 }} onClick={() => rejectTx(t.id)}>Reject</button>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="card card-pad">
+        <div className="label" style={{ marginBottom: 4, color: C.critical }}>⚠ FRAUD REVIEW · FLAGGED TRANSFERS (MONEY HELD)</div>
+        <div style={{ fontSize: 11, color: C.muted2, marginBottom: 12 }}>
+          A second officer clears a false-positive (money is released) or confirms the fraud (blocked permanently). Same segregation of duties applies.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {flagged.length === 0 && <div style={{ fontSize: 12.5, color: C.muted2, padding: '8px 0' }}>No flagged transfers to review.</div>}
+          {flagged.map((t) => {
+            const own = t.maker === me
+            return (
+              <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 14, border: `1px solid rgba(192,38,38,.3)`, borderRadius: 9, padding: '12px 14px', background: 'rgba(192,38,38,.03)' }}>
+                <span style={{ width: 34, height: 34, borderRadius: 8, background: 'rgba(192,38,38,.12)', color: C.critical, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, flex: 'none' }}>⛔</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{t.description} · {rupee(Math.round(t.amount))}</div>
+                  <div style={{ fontSize: 11.5, color: C.critical, marginTop: 2 }}>{t.flagged_reason}</div>
+                  <div style={{ fontSize: 11.5, color: C.muted2, marginTop: 2 }}>maker <b>{t.maker}</b> · {T(t.t)} · {t.mode} · {t.from} → {t.to}</div>
+                </div>
+                {own ? (
+                  <span style={{ fontSize: 11, color: C.warnInk, fontStyle: 'italic', maxWidth: 150, textAlign: 'right' }}>
+                    you initiated this — another officer must review
+                  </span>
+                ) : (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn btn-ghost" style={{ padding: '7px 12px', fontSize: 12 }} onClick={() => resolveFraud(t.id, 'clear')}>Clear (false alarm)</button>
+                    <button className="btn" style={{ background: C.critical, color: '#fff', padding: '7px 12px', fontSize: 12 }} onClick={() => resolveFraud(t.id, 'confirm')}>Confirm fraud</button>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )

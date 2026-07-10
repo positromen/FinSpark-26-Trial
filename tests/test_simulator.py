@@ -22,7 +22,7 @@ def db():
 
 def test_seed_users_idempotent(db):
     users = seed_users(db)
-    assert len(seed_users(db)) == len(users) == 9  # 8 employees + 1 SOC analyst
+    assert len(seed_users(db)) == len(users) == 10  # 9 employees (incl. approving officer) + 1 SOC analyst
     dormant = [u for u in users if u.is_dormant]
     assert len(dormant) == 1 and dormant[0].is_vendor
     expired = [u for u in users if u.access_expires_at]

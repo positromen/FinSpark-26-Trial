@@ -141,9 +141,10 @@ connect, allow TCP port 8000 through Windows Firewall on Computer~1.
 \rowcolor{navy}\textbf{\color{white}Login} & \textbf{\color{white}Who} & \textbf{\color{white}Use for} \\
 \midrule
 \code{soc\_admin} & Meera Nair, SOC analyst & the SOC Console \\
-\rowcolor{light}\code{rmehta} & Rajesh Mehta, DBA & the normal employee (banking, JIT, vault) \\
-\code{ext\_dsouza} & Kevin D'Souza, dormant vendor & the malicious attacker (challenged at login) \\
-\rowcolor{light}\code{ext\_rao} & Priya Rao, expired vendor & the negligent case \\
+\rowcolor{light}\code{rmehta} & Rajesh Mehta, DBA & normal employee / transfer \textbf{maker} (banking, JIT, vault) \\
+\code{dgokhale} & Deepa Gokhale, Officer & the second officer / \textbf{checker} who approves or clears transfers \\
+\rowcolor{light}\code{ext\_dsouza} & Kevin D'Souza, dormant vendor & the malicious attacker (challenged at login) \\
+\code{ext\_rao} & Priya Rao, expired vendor & the negligent case \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -174,6 +175,13 @@ transfer \textbf{Rs 50,000} $\rightarrow$ \textbf{CLEARED}; transfer \textbf{Rs 
 \textbf{FRAUD flash}, and point to the SOC: the CRITICAL alert just landed.
 \say{This is a real banking floor. Big money needs a second officer; a watch-listed payee stops the money
 and alerts the SOC in the same second.}
+
+\textbf{Segregation of duties (optional, 30s).} Open \textbf{Approvals} as \code{rmehta}: the held item reads
+\emph{``you initiated this --- another officer must approve''} (no buttons). Sign in as \code{dgokhale} (the
+officer), \textbf{Approve} it --- money moves and the ledger shows a check mark with the checker's name; in
+\textbf{Fraud review}, \textbf{Clear} the flagged transfer or \textbf{Confirm fraud}.
+\say{The maker can never approve their own transfer --- the checker must be a different, authorized officer,
+and every decision is signed into the audit chain naming both people.}
 
 \begin{warnbox}
 \textbf{Order matters.} Do \textbf{JIT + vault next} and the \textbf{big export last}. Money transfers add

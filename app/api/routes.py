@@ -301,14 +301,21 @@ async def bank_transfer(body: TransferIn, user: User = Depends(_employee),
     return result
 
 
+def _txn_audit_payload(tx: dict, checker: str) -> str:
+    """A self-describing audit line for a checker's decision on a transfer."""
+    return (f"tx={tx['id']} {tx['status']} amount={tx['amount']:.0f} "
+            f"maker={tx['maker']} checker={checker} {tx['from']}->{tx['to']}")
+
+
 @router.post("/bank/transactions/{tx_id}/approve")
 async def bank_tx_approve(tx_id: int, user: User = Depends(_employee),
                           db: OrmSession = Depends(get_db)) -> dict:
     try:
-        r = bank.approve(db, tx_id, user.username)
+        r = bank.approve(db, tx_id, user.username, user.role)
     except bank.TransferError as e:
         raise HTTPException(400, str(e))
-    audit.append_entry(db, actor=user.username, action="TXN_APPROVED", payload=f"tx={tx_id}")
+    audit.append_entry(db, actor=user.username, action="TXN_APPROVED",
+                       payload=_txn_audit_payload(r["transaction"], user.username))
     return r
 
 
@@ -316,10 +323,35 @@ async def bank_tx_approve(tx_id: int, user: User = Depends(_employee),
 async def bank_tx_reject(tx_id: int, user: User = Depends(_employee),
                          db: OrmSession = Depends(get_db)) -> dict:
     try:
-        r = bank.reject(db, tx_id)
+        r = bank.reject(db, tx_id, user.username, user.role)
     except bank.TransferError as e:
         raise HTTPException(400, str(e))
-    audit.append_entry(db, actor=user.username, action="TXN_REJECTED", payload=f"tx={tx_id}")
+    audit.append_entry(db, actor=user.username, action="TXN_REJECTED",
+                       payload=_txn_audit_payload(r["transaction"], user.username))
+    return r
+
+
+class FraudDecisionIn(BaseModel):
+    decision: str  # "clear" (false positive -> settle) | "confirm" (fraud -> block)
+
+
+@router.post("/bank/transactions/{tx_id}/resolve-fraud")
+async def bank_tx_resolve_fraud(tx_id: int, body: FraudDecisionIn,
+                                user: User = Depends(_employee),
+                                db: OrmSession = Depends(get_db)) -> dict:
+    """A second officer resolves a FLAGGED transfer: clear it or confirm the fraud."""
+    try:
+        r = bank.resolve_flag(db, tx_id, user.username, user.role, body.decision)
+    except bank.TransferError as e:
+        raise HTTPException(400, str(e))
+    action = "TXN_FRAUD_CLEARED" if body.decision == "clear" else "TXN_FRAUD_CONFIRMED"
+    audit.append_entry(db, actor=user.username, action=action,
+                       payload=_txn_audit_payload(r["transaction"], user.username))
+    await manager.broadcast({"type": "alert", "user": user.username, "role": user.role,
+                             "severity": "INFO" if body.decision == "clear" else "CRITICAL",
+                             "action": r["status"], "score": 0, "insider_type": None,
+                             "reasons": [f"Flagged transfer #{tx_id} {r['status'].lower()} "
+                                         f"by officer {user.username}"]})
     return r
 
 

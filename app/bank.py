@@ -15,6 +15,10 @@ from app.models.entities import BankAccount, BankTransaction
 HIGH_VALUE = 200000.0    # > this needs a second approver (maker-checker HELD)
 FRAUD_VALUE = 1000000.0  # >= this is auto-FLAGGED for fraud review (blocked pending)
 
+# Roles with authority to sign off a held/flagged transfer. Segregation of duties:
+# the approver must hold approval authority AND be a different person than the maker.
+APPROVER_ROLES = {"OFFICER", "DBA"}
+
 # External payees the portal offers. The watchlisted one triggers a fraud FLAG.
 EXTERNAL_BENEFICIARIES = [
     {"number": "50200000112233", "name": "Sunrise Suppliers (external)", "watchlist": False},
@@ -80,7 +84,8 @@ def transactions(db: OrmSession, limit: int = 25) -> list[dict]:
 
 
 def pending(db: OrmSession) -> list[dict]:
-    rows = (db.query(BankTransaction).filter_by(status="HELD")
+    """Transfers awaiting a second officer: HELD (maker-checker) + FLAGGED (fraud review)."""
+    rows = (db.query(BankTransaction).filter(BankTransaction.status.in_(["HELD", "FLAGGED"]))
             .order_by(BankTransaction.id.desc()).all())
     return [_tx_dict(t) for t in rows]
 
@@ -88,7 +93,7 @@ def pending(db: OrmSession) -> list[dict]:
 def _tx_dict(t: BankTransaction) -> dict:
     return {"id": t.id, "t": t.timestamp.isoformat(), "description": t.description,
             "from": mask(t.from_number), "to": mask(t.to_number), "amount": t.amount,
-            "mode": t.mode, "status": t.status, "maker": t.maker,
+            "mode": t.mode, "status": t.status, "maker": t.maker, "checker": t.checker,
             "flagged_reason": t.flagged_reason}
 
 
@@ -171,30 +176,75 @@ def transfer(db: OrmSession, from_number: str, to_number: str, amount: float,
     return {"status": status, "message": messages[status], "transaction": _tx_dict(tx), "alert": alert}
 
 
-def approve(db: OrmSession, tx_id: int, approver: str) -> dict:
-    tx = db.get(BankTransaction, tx_id)
-    if tx is None or tx.status != "HELD":
-        raise TransferError("No held transaction with that id.")
-    src, dst = _acct(db, tx.from_number), _acct(db, tx.to_number)
-    if src is None or dst is None:
-        raise TransferError("Account not found.")
-    if amount_ok := (src.acc_type == "Loan" or tx.amount <= src.balance):
-        _settle(src, dst, tx.amount)
-        tx.status = "CLEARED"
-        db.commit()
-        return {"status": "CLEARED", "transaction": _tx_dict(tx)}
-    raise TransferError("Insufficient balance at approval time.")
+def _authorize_checker(tx: BankTransaction, checker: str, checker_role: str,
+                       expected_status: str) -> None:
+    """Enforce segregation of duties before a second officer acts on a transfer."""
+    if tx is None or tx.status != expected_status:
+        raise TransferError(f"No {expected_status.lower()} transaction with that id.")
+    if checker == tx.maker:
+        raise TransferError(
+            "Maker-checker: the approving officer must be different from the maker "
+            f"('{tx.maker}' initiated this transfer).")
+    if checker_role not in APPROVER_ROLES:
+        raise TransferError(
+            f"Role '{checker_role}' is not authorized to sign off transfers "
+            f"(needs one of: {', '.join(sorted(APPROVER_ROLES))}).")
 
 
-def reject(db: OrmSession, tx_id: int) -> dict:
+def approve(db: OrmSession, tx_id: int, checker: str, checker_role: str = "OFFICER") -> dict:
+    """A second, authorized officer approves a HELD transfer — money now moves."""
     tx = db.get(BankTransaction, tx_id)
-    if tx is None or tx.status != "HELD":
-        raise TransferError("No held transaction with that id.")
-    tx.status = "REJECTED"
+    _authorize_checker(tx, checker, checker_role, "HELD")
+    src, dst = _acct(db, tx.from_number), _acct(db, tx.to_number)  # dst None = external payee
+    if src is None:
+        raise TransferError("Source account not found.")
+    if not (src.acc_type == "Loan" or tx.amount <= src.balance):
+        raise TransferError("Insufficient balance at approval time.")
+    _settle(src, dst, tx.amount)
+    tx.status, tx.checker = "CLEARED", checker
+    db.commit()
+    return {"status": "CLEARED", "transaction": _tx_dict(tx)}
+
+
+def reject(db: OrmSession, tx_id: int, checker: str, checker_role: str = "OFFICER") -> dict:
+    """A second, authorized officer rejects a HELD transfer — money never moves."""
+    tx = db.get(BankTransaction, tx_id)
+    _authorize_checker(tx, checker, checker_role, "HELD")
+    tx.status, tx.checker = "REJECTED", checker
     db.commit()
     return {"status": "REJECTED", "transaction": _tx_dict(tx)}
 
 
-def _settle(src: BankAccount, dst: BankAccount, amount: float) -> None:
+def resolve_flag(db: OrmSession, tx_id: int, officer: str, officer_role: str,
+                 decision: str) -> dict:
+    """Resolve a FLAGGED (suspected-fraud) transfer.
+
+    decision='clear'   -> a reviewed false-positive: release and settle it.
+    decision='confirm' -> confirmed fraud: block permanently; money never moves.
+    Segregation of duties applies: the reviewing officer must be authorized and
+    different from the maker who initiated the transfer.
+    """
+    tx = db.get(BankTransaction, tx_id)
+    _authorize_checker(tx, officer, officer_role, "FLAGGED")
+    if decision == "clear":
+        src, dst = _acct(db, tx.from_number), _acct(db, tx.to_number)
+        if src is None:
+            raise TransferError("Source account not found.")
+        if not (src.acc_type == "Loan" or tx.amount <= src.balance):
+            raise TransferError("Insufficient balance at clearing time.")
+        _settle(src, dst, tx.amount)
+        tx.status, tx.checker = "CLEARED", officer
+    elif decision == "confirm":
+        tx.status, tx.checker = "BLOCKED", officer
+    else:
+        raise TransferError("decision must be 'clear' or 'confirm'.")
+    db.commit()
+    return {"status": tx.status, "transaction": _tx_dict(tx)}
+
+
+def _settle(src: BankAccount, dst: BankAccount | None, amount: float) -> None:
+    """Debit the source; credit the destination if it is an internal account.
+    An external beneficiary (dst is None) simply leaves the bank."""
     src.balance -= amount
-    dst.balance += amount
+    if dst is not None:
+        dst.balance += amount

@@ -17,6 +17,7 @@ RESOURCES_BY_ROLE: dict[str, list[str]] = {
     "SYSADMIN": ["app-server-01", "app-server-02", "backup-server"],
     "NET_ADMIN": ["firewall-hq", "router-dc1", "vpn-gateway"],
     "APP_ADMIN": ["netbanking-app", "upi-switch", "mobile-app-backend"],
+    "OFFICER": ["core-banking-db", "payments-hub", "approvals-desk"],
     "CONTRACTOR": ["report-server", "test-db"],
 }
 
@@ -29,6 +30,8 @@ DEFAULT_USERS: list[dict] = [
     {"username": "pjoshi", "name": "Priya Joshi", "role": "SYSADMIN"},
     {"username": "vdeshmukh", "name": "Vikram Deshmukh", "role": "NET_ADMIN"},
     {"username": "nshinde", "name": "Neha Shinde", "role": "APP_ADMIN"},
+    # Designated banking approver — the second officer in maker-checker.
+    {"username": "dgokhale", "name": "Deepa Gokhale", "role": "OFFICER"},
     {"username": "ext_dsouza", "name": "Kevin D'Souza (Vendor)", "role": "CONTRACTOR",
      "is_vendor": True, "is_dormant": True},  # dormant vendor — the malicious attacker
     {"username": "ext_rao", "name": "Anil Rao (Vendor)", "role": "CONTRACTOR",

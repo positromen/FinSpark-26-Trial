@@ -1,0 +1,303 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=0.9in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[dvipsnames,table]{xcolor}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage[most]{tcolorbox}
+\usepackage{fancyhdr}
+\usepackage{parskip}
+\usepackage[hidelinks]{hyperref}
+
+% ---- palette ----
+\definecolor{navy}{HTML}{14304F}
+\definecolor{navy2}{HTML}{1D4370}
+\definecolor{accent}{HTML}{3987E5}
+\definecolor{good}{HTML}{0C8A3C}
+\definecolor{warn}{HTML}{A16207}
+\definecolor{serious}{HTML}{C05621}
+\definecolor{crit}{HTML}{C02626}
+\definecolor{ink}{HTML}{1F2937}
+\definecolor{muted}{HTML}{5B6B80}
+\definecolor{hair}{HTML}{DBE0E8}
+\definecolor{light}{HTML}{EEF3F6}
+
+\hypersetup{colorlinks=true,linkcolor=navy2,urlcolor=accent}
+
+% ---- section styling ----
+\titleformat{\section}{\Large\bfseries\color{navy}}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\large\bfseries\color{navy2}}{\thesubsection}{0.5em}{}
+\titlespacing*{\section}{0pt}{16pt}{6pt}
+\titlespacing*{\subsection}{0pt}{12pt}{4pt}
+
+% ---- header / footer ----
+\pagestyle{fancy}\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancyhead[L]{\small\color{muted}Prahari — Demo Guide}
+\fancyhead[R]{\small\color{muted}FinSpark'26 · PS1}
+\fancyfoot[C]{\small\color{muted}\thepage}
+
+% ---- helpers ----
+\newtcolorbox{saybox}{colback=light,colframe=navy,boxrule=0.8pt,arc=2pt,
+  left=8pt,right=8pt,top=5pt,bottom=5pt,fontupper=\itshape}
+\newtcolorbox{warnbox}{colback=crit!6,colframe=crit,boxrule=0.8pt,arc=2pt,
+  left=8pt,right=8pt,top=5pt,bottom=5pt}
+\newtcolorbox{tipbox}{colback=good!7,colframe=good,boxrule=0.8pt,arc=2pt,
+  left=8pt,right=8pt,top=5pt,bottom=5pt}
+\newcommand{\say}[1]{\begin{saybox}\textbf{Say:} #1\end{saybox}}
+\newcommand{\code}[1]{{\ttfamily\color{navy2}#1}}
+\newcommand{\beat}[2]{%
+  \subsection*{\color{navy2}\rule[0.1em]{0.55em}{0.55em}\ \ #1}%
+  \nopagebreak\vspace{-4pt}{\raggedright\small\itshape\color{muted}#2\par}\nopagebreak\vspace{2pt}}
+
+\setlist{leftmargin=1.3em,itemsep=1pt,topsep=2pt}
+
+\renewcommand{\arraystretch}{1.35}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\begin{document}
+
+% =================== TITLE ===================
+\begin{titlepage}
+\centering
+\vspace*{2.5cm}
+{\Huge\bfseries\color{navy} PRAHARI}\\[4pt]
+{\large\color{muted} The sentinel for privileged access}\\[1.4cm]
+{\LARGE\bfseries\color{navy2} Demo \& Presentation Guide}\\[10pt]
+{\large\color{ink} How to run the live demonstration for the judges}\\[1.4cm]
+\begin{tcolorbox}[colback=light,colframe=navy,width=0.82\textwidth,arc=3pt,boxrule=1pt]
+\centering\small
+\textbf{Problem Statement 1} — Privileged Access Misuse \& Insider Threat Detection\\[3pt]
+FinSpark'26 · Bank of Maharashtra\\[3pt]
+\code{github.com/positromen/FinSpark-26-Trial}
+\end{tcolorbox}
+\vfill
+{\small\color{muted} This script is verified end-to-end against the running server, the database,
+and the built UI. Follow the beats in order — the ordering is deliberate.}
+\vspace{1.5cm}
+\end{titlepage}
+
+% =================== SCORECARD ===================
+\section{The scorecard --- PS1 vs Prahari}
+
+Every expected outcome and focus area is live in the product and covered in the demo below.
+
+\begin{center}\small
+\begin{tabular}{L{5.4cm} L{5.2cm} L{3.6cm}}
+\toprule
+\rowcolor{navy}\textbf{\color{white}The problem asks for} & \textbf{\color{white}Prahari delivers} & \textbf{\color{white}Shown at} \\
+\midrule
+Detect misuse of privileged accounts & Rule engine + session recording + banking fraud gates & Beats 1:15, 3:45 \\
+\rowcolor{light}Identify insider threats in real time & Every action scored \& enforced before it runs; WebSocket push & Whole demo (2 computers) \\
+AI-driven behavioural analysis & IsolationForest + baselines + \emph{measured} 100\% detection, 0 false blocks & Beat 5:30 \\
+\rowcolor{light}Risk-based access control & ALLOW / MFA / maker-checker / BLOCK, insider-type aware & Beats 3:45, 5:30 \\
+Risk-Based Authentication & Step-up MFA at the login screen itself & Beat 0:30 \\
+\rowcolor{light}Protect critical admin systems & Blocks, lockout, JIT access, credential checkout, access review & Beats 2:30, 4:15 \\
+Quantum-Proof Cryptography & ML-KEM-768 vault · ML-DSA-65 signed chain · signed reports & Beat 6:45 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{tipbox}
+\textbf{Verified.} 54 automated tests pass; a live walk of this exact script passes every beat against
+the real API and database; both post-quantum providers (native \& pure-Python) verified.
+\end{tipbox}
+
+% =================== SETUP ===================
+\section{Setup}
+
+\textbf{Requirements:} Python 3.11+, a browser. \textbf{No compiler, no internet at demo time} — the
+post-quantum layer falls back to pure Python automatically.
+
+\textbf{Start (always fresh for a demo):}
+\begin{center}
+\code{.\textbackslash run.ps1 -Reset}\quad — wipes + reseeds the database, trains the baseline, serves on \code{:8000}
+\end{center}
+
+\begin{warnbox}
+\textbf{Always \code{-Reset} before a demo.} A previous run may have tampered the audit chain (the Tamper
+button really edits a record) and locked accounts. \code{-Reset} restores a clean, green starting state.
+\end{warnbox}
+
+\code{run.ps1} prints two URLs: \textbf{This computer} (\code{http://localhost:8000}) and
+\textbf{Other computers} (\code{http://<LAN-IP>:8000}).
+
+\subsection*{Two-computer demo (recommended --- the ``wow'')}
+\begin{itemize}
+\item \textbf{Computer 1 (SOC big screen):} open \code{localhost:8000}, sign in \code{soc\_admin}, stay on \textbf{Overview}. A green \textbf{LIVE} dot means the feed is connected.
+\item \textbf{Computer 2 (employee):} same Wi-Fi, open the LAN URL, sign in as the employee accounts.
+\end{itemize}
+Everything the employee does appears on the SOC screen instantly — no refresh. If Computer~2 can't
+connect, allow TCP port 8000 through Windows Firewall on Computer~1.
+
+\subsection*{Accounts \textnormal{\small(all password \code{prahari123} · MFA code \code{246810})}}
+\begin{center}\small
+\begin{tabular}{L{2.8cm} L{5.4cm} L{5.2cm}}
+\toprule
+\rowcolor{navy}\textbf{\color{white}Login} & \textbf{\color{white}Who} & \textbf{\color{white}Use for} \\
+\midrule
+\code{soc\_admin} & Meera Nair, SOC analyst & the SOC Console \\
+\rowcolor{light}\code{rmehta} & Rajesh Mehta, DBA & the normal employee (banking, JIT, vault) \\
+\code{ext\_dsouza} & Kevin D'Souza, dormant vendor & the malicious attacker (challenged at login) \\
+\rowcolor{light}\code{ext\_rao} & Priya Rao, expired vendor & the negligent case \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% =================== THE DEMO ===================
+\section{The 8-minute judge demo}
+
+SOC Console on the big screen (\code{soc\_admin}); the employee machine ready. Read the \emph{Say} lines.
+\textbf{The order of the \code{rmehta} beats is deliberate} — see the note at 1:15.
+
+\beat{0:00 — Open on the SOC}{30s · framing}
+Quiet console, green heatmap, the impact-metrics strip, green LIVE dot.
+\say{This is Prahari — the sentinel between a bank's privileged staff and its core systems. Right now it's
+a normal day: every session watched, the audit chain quantum-sealed.}
+
+\beat{0:30 — Risk-based authentication}{45s · Risk-Based Authentication}
+On the employee machine, sign in as \code{ext\_dsouza}. An amber step-up screen appears listing the reasons:
+\emph{dormant account waking up · access expired 120 days ago · unrecognized network/device}.
+\say{A dormant vendor account just woke up — and a correct password alone doesn't get in. Risk-based
+authentication challenges it at the door.}
+Enter \code{246810}. \say{Our attacker has phished the one-time code — now watch what happens to him \emph{inside}.}
+\emph{(Leave him logged in — he is the attacker at 4:15.)}
+
+\beat{1:15 — Real banking, a normal employee}{75s · detect misuse / protect systems}
+Second employee window: \code{rmehta} (straight in — trusted context). On the \textbf{banking desk}:
+transfer \textbf{Rs 50,000} $\rightarrow$ \textbf{CLEARED}; transfer \textbf{Rs 5,00,000} $\rightarrow$
+\textbf{HELD for maker-checker}; pay ``QuickCash Holdings'' (watch-listed) $\rightarrow$ red
+\textbf{FRAUD flash}, and point to the SOC: the CRITICAL alert just landed.
+\say{This is a real banking floor. Big money needs a second officer; a watch-listed payee stops the money
+and alerts the SOC in the same second.}
+
+\begin{warnbox}
+\textbf{Order matters.} Do \textbf{JIT + vault next} and the \textbf{big export last}. Money transfers add
+no session risk, so \code{rmehta} is still ``clean'' for the access beat. If you run the 1,200-record export
+\emph{first}, its risk stacks with the escalation and \code{rmehta} is \emph{blocked} before you can show
+JIT — correct behaviour, wrong demo order.
+\end{warnbox}
+
+\beat{2:30 — JIT access + the quantum vault}{75s · PAM / protect systems}
+Still \code{rmehta}, clean session. On the \textbf{Action Console} click \textbf{Escalate privilege} —
+it is \textbf{allowed but flagged}; open the why-panel: \emph{``privilege change outside normal grant process.''}
+\say{On its own that's just noted — but there is a right way to do this.}
+Go to \textbf{JIT Access}, request a grant (``schema migration, 15 min''); approve it on the SOC under
+\textbf{JIT \& Credentials} (the badge is already lit). Back on the console, \textbf{Escalate privilege}
+again — the flag is gone: \emph{``sanctioned by an approved JIT grant.''}
+\say{No standing privilege: elevation is requested with a reason, approved, time-boxed, and auto-expiring —
+the engine stands down for exactly that grant, then re-arms when it lapses.}
+Open \textbf{Credential Vault} $\rightarrow$ \textbf{Check out} the core-banking root password — the secret
+appears with a 5-minute countdown.
+\say{Secrets live sealed under ML-KEM-768 — quantum-safe. The vault opens only for a trusted session, for
+five minutes, and leaves a signed receipt.}
+
+\beat{3:45 — Proportionate response: the big export}{30s · risk-based access control}
+Last \code{rmehta} action. On the \textbf{Action Console}, keep the target on \textbf{core-banking-db}
+(his home system), export \textbf{1,200 records} $\rightarrow$ \textbf{STEP-UP MFA} pop-up $\rightarrow$
+enter \code{246810} $\rightarrow$ allowed. The activity log updates a second later.
+\say{Unusual volume for a genuine DBA: the response is proportionate — verify, not block.}
+\emph{(Keep the target on core-banking-db; the same export on a system outside his role is held for
+maker-checker instead — also correct, but a different beat.)}
+
+\beat{4:15 — The attack}{75s · real-time detection + response}
+Back to \code{ext\_dsouza}. \textbf{Escalate privilege} $\rightarrow$ held. Then \textbf{bulk export 5,000
+records} $\rightarrow$ \textbf{full-screen red BLOCK}, account locked. The SOC screen lights up on its own:
+a red session at 100, a flashing CRITICAL alert typed \textbf{MALICIOUS}, and the replay showing the export
+\textbf{struck through — DENIED}. Try the \textbf{Credential Vault} as the attacker $\rightarrow$
+\textbf{checkout refused}. Log him out and back in $\rightarrow$ \textbf{still locked}.
+\say{Caught mid-action, before the data left. The block is server-side, the account stays dead, and even
+the vault refuses him — and every refusal is signed evidence.}
+
+\beat{5:30 — Three insider types + explainable, measured AI}{75s · AI behavioural analysis}
+SOC header buttons: \textbf{Compromised} $\rightarrow$ STEP-UP MFA (new country + device, inhuman pace);
+\textbf{Negligent} $\rightarrow$ MAKER-CHECKER (\emph{``we never auto-block a careless employee; a human
+reviews''}). Open \textbf{AI Model Insights}: feature bars vs the user's own and peer baselines, the risk
+trajectory climbing, and \textbf{Measured Performance}.
+\say{We didn't just build AI — we measured it. On a held-out month of 230 benign sessions: 100\% of attacks
+detected with the correct response and type, zero false blocks, 1.7\% false alarms.}
+
+\beat{6:45 — Quantum-safe evidence + closing the loop}{60s · Quantum-Proof Cryptography}
+Click \textbf{Verify} $\rightarrow$ green, every signature valid. Click \textbf{Tamper} $\rightarrow$ the
+chain fails \textbf{at the exact entry}, the banner turns red.
+\say{An insider who edits the evidence would have to forge a NIST post-quantum signature.}
+Click \textbf{Evidence pack} on the blocked session.
+\say{One click — replay, trajectory, model reasoning, audit extract — sealed with an ML-DSA-65 signature.
+This is what compliance hands to the RBI.}
+Finally \textbf{Lock account} on any remaining flagged session; the toast confirms it's sealed to the chain.
+
+\beat{7:45 — Close}{30s}
+\say{Six outcomes, all live: detection, real time, measured AI, risk-based control from login to logout,
+protected admin systems with JIT and a quantum vault, and evidence that can't be silently edited. Prahari
+runs offline, on any laptop, with 54 passing tests — and everything you saw was two computers talking over
+this Wi-Fi.}
+
+% =================== Q&A ===================
+\section{Judge Q\&A --- quick answers}
+\begin{description}[leftmargin=0pt,style=nextline,itemsep=3pt]
+\item[Real AI or rules?] Both, fused. IsolationForest (scikit-learn) on behavioural history + per-user
+baselines contributes up to 25 points; the explainable rule engine sets the band. Attribution is on the
+Model Insights page.
+\item[How do you know it works?] Held-out benchmark on an independent seed: 100\% detection, correct typing
+and response on the three attacks; 0 false blocks on 230 benign sessions; 1.7\% false-alarm rate. Plus 54
+pytest tests.
+\item[Why isn't negligence blocked?] Type-aware policy: a careless employee is a control failure to
+remediate with a human second-check (maker-checker), not an attack — enforced in \code{decide()} and tested.
+\item[What is quantum-proof, exactly?] FIPS 203 ML-KEM-768 seals the vault (the AES key \emph{is} the KEM
+shared secret — defeats harvest-now-decrypt-later); FIPS 204 ML-DSA-65 signs every audit entry and incident
+report over a hash chain.
+\item[What if liboqs won't install?] A pure-Python provider (kyber-py / dilithium-py) is auto-selected; same
+algorithms, same tests pass. \code{GET /pqc/info} shows the active provider.
+\item[Can the employee bypass the browser?] No — enforcement is server-side; the API refuses. Blocked stays
+blocked across logins; challenged actions aren't saved until allowed, so the score can't be gamed.
+\item[How does it scale?] Stateless scoring behind a load balancer; SQLite $\rightarrow$ PostgreSQL is one
+connection string; WebSocket fans out via Redis/Kafka; the same Event schema ingests real PAM/SIEM feeds.
+\end{description}
+
+% =================== NUMBERS + TROUBLESHOOTING ===================
+\section{Numbers to quote \& troubleshooting}
+
+\begin{minipage}[t]{0.48\textwidth}
+\textbf{\color{navy}Numbers}\par\small
+\begin{tabular}{L{1.9cm} L{4.0cm}}
+\toprule
+\textbf{54} & tests, all passing \\
+\textbf{11} & rules, 3 insider types \\
+\textbf{<1s} & score per action \\
+\textbf{100 / 0 / 1.7\%} & detection / false blocks / false alarms \\
+\textbf{Rs 2L / 10L} & maker-checker / auto-fraud \\
+\textbf{5 / 60 min} & vault lease / max JIT grant \\
+\textbf{KEM-768 / DSA-65} & FIPS 203 / 204 \\
+\bottomrule
+\end{tabular}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.48\textwidth}
+\textbf{\color{navy}If something looks off}\par\small
+\begin{tabular}{L{3.0cm} L{3.3cm}}
+\toprule
+Chain shows FAILED at start & you tampered earlier: \code{-Reset} \\
+Attacker already blocked & previous run: \code{-Reset} \\
+2nd computer can't connect & allow TCP 8000 in firewall \\
+LIVE dot red & auto-reconnects; polling keeps data fresh \\
+liboqs error elsewhere & none — pure-Python fallback loads \\
+\bottomrule
+\end{tabular}
+\end{minipage}
+
+\vspace{10pt}
+\begin{tipbox}
+\textbf{Reset between runs:} Ctrl+C the server, then \code{.\textbackslash run.ps1 -Reset}.\\
+\textbf{Fallback:} record one clean run the night before and keep it on the laptop \emph{and} a phone.
+\end{tipbox}
+
+\vfill
+\begin{center}\small\color{muted}
+Prahari — detect with explainable, measured AI plus rules; respond in real time; remove standing privilege;
+keep the proof quantum-safe.
+\end{center}
+
+\end{document}

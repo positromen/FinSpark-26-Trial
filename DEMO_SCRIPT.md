@@ -139,42 +139,48 @@ Quiet console, green heatmap, impact-metrics strip, green LIVE dot.
 On the employee machine, sign in as `ext_dsouza`. The amber challenge appears listing the three reasons.
 **"A dormant vendor account just woke up — a password alone doesn't get in. Risk-based authentication challenges it at the door."** Enter `246810`: **"Our attacker has phished the OTP — watch what happens to him inside."** *(Leave him logged in — he's Act 4.)*
 
-### 1:15 — Real banking + a normal employee (90s) · *Outcome: detect misuse / protect systems*
+### 1:15 — Real banking + a normal employee (75s) · *Outcome: detect misuse / protect systems*
 
 Second employee window: `rmehta` (straight in — trusted). Show the **banking desk**: transfer ₹50,000 → **CLEARED**. Transfer ₹5,00,000 → **HELD for maker-checker**. Pay "QuickCash Holdings ⚠" → red **FRAUD flash** + point at the SOC screen: the CRITICAL alert just landed.
 **"This is a real banking floor. Big money needs two officers; a watch-listed payee stops the money and alerts the SOC in the same second."**
 
-On the Action Console: export **1,200 records** → **STEP-UP MFA** pop-up → enter code → allowed.
-**"Unusual volume: the response is proportionate — verify, not block."**
+> **Order matters — do JIT + vault next, the big export last.** Money transfers add no session risk, so rmehta is still "clean" for the access beat. If you run the 1,200-record export *first*, its risk stacks with the escalation and rmehta gets *blocked* before you can show JIT — correct behaviour, wrong demo order.
 
-### 2:45 — JIT + the quantum vault (75s) · *Outcome: PAM / protect systems*
+### 2:30 — JIT + the quantum vault (75s) · *Outcome: PAM / protect systems*
 
-As `rmehta`: click **Escalate privilege** → alarmed. Request a **JIT grant** ("schema migration, 15 min"), approve it on the SOC (**JIT & Credentials** — the badge is already lit). Escalate again → **sanctioned**.
-**"No standing privilege: elevation is approved, time-boxed, auto-expiring — and the engine stands down for exactly that grant, then re-arms."**
+Still `rmehta`, clean session. On the **Action Console** click **Escalate privilege** → it's **allowed but flagged** — open the result/why panel: *"privilege change outside normal grant process."*
+**"On its own that's just noted — but there's a right way to do this."**
+Go to **JIT Access**, request a grant ("schema migration, 15 min"); approve it on the SOC (**JIT & Credentials** — the badge is already lit). Back on the console, **Escalate privilege** again → the reason is gone: *"sanctioned by an approved JIT grant."*
+**"No standing privilege: elevation is approved, time-boxed, auto-expiring — the engine stands down for exactly that grant, then re-arms when it lapses."**
 
 Open **Credential Vault** → check out the core-banking root password → the secret appears with a 5-minute countdown.
 **"Secrets live sealed under ML-KEM-768 — quantum-safe. The vault opens only for a trusted session, for five minutes, with a signed receipt."**
 
-### 4:00 — The attack (75s) · *Outcomes: real-time detection + response*
+### 3:45 — Proportionate response: the big export (30s) · *Outcome: risk-based access control*
+
+Last `rmehta` action, on the **Action Console**: **target core-banking-db**, export **1,200 records** → **STEP-UP MFA** pop-up → enter `246810` → allowed. *(Keep the target on core-banking-db — his home system; the same export on a system outside his role is held for maker-checker instead, which is also correct but a different beat.)*
+**"Unusual volume for a genuine DBA: the response is proportionate — verify, not block. The activity log updates a second later."**
+
+### 4:15 — The attack (75s) · *Outcomes: real-time detection + response*
 
 Back to `ext_dsouza`: escalate privilege → held. Then **bulk export 5,000 records** → **full-screen red BLOCK**, account locked. The SOC screen lights up by itself: red session at 100, flashing CRITICAL alert typed **MALICIOUS**, replay shows the export **struck through — DENIED**.
 Try the vault as the attacker → **checkout refused**. Log him out and back in → **still locked**.
 **"Caught mid-action, before the data left. The block is server-side, the account stays dead, and even the vault refuses him — and every refusal is evidence."**
 
-### 5:15 — Three insider types + explainable AI (75s) · *Outcome: AI behavioural analysis*
+### 5:30 — Three insider types + explainable AI (75s) · *Outcome: AI behavioural analysis*
 
 SOC buttons: **🎭 Compromised** → STEP-UP MFA (Singapore + new device + inhuman pace). **⚠ Negligent** → MAKER-CHECKER (expired vendor, personal laptop — *"we never auto-block a careless employee; a human reviews"*).
 Open **AI Model Insights**: feature bars vs personal + peer baselines, the risk trajectory climbing, and **Measured Performance**:
 **"We didn't just build AI, we measured it: on a held-out month — 230 benign sessions — 100% of attacks detected with the correct response and type, zero false blocks, 1.7% false alarms."**
 
-### 6:30 — Quantum-safe evidence + closed loop (60s) · *Outcome: QPC*
+### 6:45 — Quantum-safe evidence + closed loop (60s) · *Outcome: QPC*
 
 **⛓ Verify** → green, every signature valid. **✂ Tamper** → the chain fails **at the exact entry**, banner turns red.
 **"An insider who edits the evidence would need to forge a NIST post-quantum signature."**
 Click **⬇ Evidence pack** on the blocked session: **"One click — replay, trajectory, model reasoning, audit extract — sealed with an ML-DSA-65 signature. This is what compliance hands to the RBI."**
 Finally **⛔ Lock account** on any remaining flagged session — the toast confirms it's sealed to the chain.
 
-### 7:30 — Close (30s)
+### 7:45 — Close (30s)
 
 **"Six outcomes, all live: detection, real time, measured AI, risk-based control from login to logout, protected admin systems with JIT and a quantum vault, and evidence that can't be silently edited. Prahari runs offline, on any laptop, with 54 passing tests — and everything you saw was two computers talking over this Wi-Fi."**
 

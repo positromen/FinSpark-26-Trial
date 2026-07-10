@@ -6,7 +6,8 @@ import Logo from '../components/Logo.jsx'
 
 const DEMO = [
   { id: 'soc_admin', desc: 'SOC analyst — the console', color: '#1d4ed8' },
-  { id: 'rmehta', desc: 'DBA — normal staff', color: '#0e7a0e' },
+  { id: 'rmehta', desc: 'DBA — normal staff / transfer maker', color: '#0e7a0e' },
+  { id: 'dgokhale', desc: 'Officer — approves transfers (checker)', color: '#1c607a' },
   { id: 'ext_dsouza', desc: 'dormant vendor — the attacker', color: '#c02626', pill: 'MALICIOUS', t: TYPE.malicious },
   { id: 'ext_rao', desc: 'active vendor, access expired', color: '#a16207', pill: 'NEGLIGENT', t: TYPE.negligent },
 ]

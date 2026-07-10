@@ -122,7 +122,7 @@ Three privileged secrets live **ML-KEM-768-sealed**: core-banking DB root, payme
 
 Header buttons: **☠ Malicious / 🎭 Compromised / ⚠ Negligent** run the three scripted scenarios; **✂ Tamper / ⛓ Verify** drive the quantum-safe evidence moment.
 
-**Analyst response actions** (Overview / Threat Analysis): **⛔ Lock account** (kills the session, next login refused) · **✓ Approve** (releases a held session) · **⊘ Dismiss** (marks a false positive) · **⬇ Evidence pack** (downloads the ML-DSA-signed incident report JSON). Every decision is sealed to the audit chain with a toast confirming it.
+**Analyst response actions** (Overview / Threat Analysis): **⛔ Lock account** (kills the session, next login refused) · **✓ Approve** and **⊘ Dismiss** (mark the session **reviewed** — its row turns green/neutral and drops out of the critical count, while the true score stays as the historical record) · **⬇ Evidence pack** (downloads the ML-DSA-signed incident report JSON). Every decision is sealed to the audit chain with a toast confirming it. When an officer resolves a flagged transfer, its banking alert clears from the feed too.
 
 ---
 

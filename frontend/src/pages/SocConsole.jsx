@@ -28,6 +28,10 @@ function verdictOf(score, status) {
   if (score >= 40) return { status: 'STEP-UP', k: 'STEP-UP' }
   return { status: 'ACTIVE', k: 'ACTIVE' }
 }
+// A session an analyst has reviewed (approved/dismissed) reads as resolved/normal
+// on the board — its risk_score is preserved, but it no longer shows as a live threat.
+function isResolved(s) { return !!(s && s.review) && s.status !== 'BLOCKED' }
+function sessColor(s) { return isResolved(s) ? C.good : scoreColor(s.score) }
 
 export default function SocConsole({ user, onLogout }) {
   const [section, setSection] = useState('overview')
@@ -59,13 +63,14 @@ export default function SocConsole({ user, onLogout }) {
     for (const s of live) byId.set(s.id, {
       id: s.id, user: s.user, role: s.role, score: s.score, status: s.status,
       src: `${s.source_ip} · ${s.device || s.geo || ''}`, type: s.insider_type || inferType(s.reasons),
-      reasons: s.reasons || [],
+      reasons: s.reasons || [], review: s.review_status, reviewedBy: s.reviewed_by,
     })
     for (const s of (ov?.sessions || [])) {
       if (byId.has(s.id)) continue
       const v = verdictOf(s.score)
       byId.set(s.id, { id: s.id, user: s.user, role: s.role, score: s.score, status: v.status,
-        src: `session #${s.id}`, type: inferType(s.reasons), reasons: s.reasons || [] })
+        src: `session #${s.id}`, type: inferType(s.reasons), reasons: s.reasons || [],
+        review: s.review_status, reviewedBy: s.reviewed_by })
     }
     return [...byId.values()].sort((a, b) => b.score - a.score).slice(0, 8)
   }, [live, ov])
@@ -179,7 +184,7 @@ export default function SocConsole({ user, onLogout }) {
   if (!ov) return <div className="app"><Sidebar kicker="SOC Console" groups={[]} />
     <div className="content" style={{ display: 'grid', placeItems: 'center', color: C.muted }}>Loading SOC console…</div></div>
 
-  const critCount = alerts.filter((a) => a.severity === 'CRITICAL').length
+  const critCount = alerts.filter((a) => a.severity === 'CRITICAL' && !a.resolved).length
   const blockedCount = sessions.filter((s) => s.status === 'BLOCKED').length
   const nav = [
     { title: 'MONITORING', items: [
@@ -314,20 +319,30 @@ function SessionsTable({ sessions, selected, select, flashUser, decisions, pad =
         <span>USER</span><span>ROLE</span><span style={{ textAlign: 'right' }}>SCORE</span><span>SOURCE</span><span>TYPE</span><span>STATUS</span></div>
       {sessions.map((s) => {
         const sm = statusMeta(s.status); const sel = selected?.id === s.id; const blk = s.status === 'BLOCKED'
+        const rez = isResolved(s)
         return (
           <div key={s.id} onClick={() => select(s.id)} className={flashUser === s.user ? 'flash' : ''}
                style={{ display: 'grid', gridTemplateColumns: '1.05fr .8fr 52px 1.25fr 1fr .85fr', gap: 8, padding: pad, borderRadius: 7, cursor: 'pointer', alignItems: 'center', marginBottom: 4,
-                        border: `1px solid ${sel ? (blk ? 'rgba(192,38,38,.55)' : 'rgba(57,135,229,.55)') : (blk ? 'rgba(192,38,38,.3)' : C.ring)}`,
-                        background: sel ? (blk ? 'rgba(192,38,38,.08)' : 'rgba(57,135,229,.08)') : (blk ? 'rgba(192,38,38,.04)' : '#fff') }}>
+                        borderLeft: rez ? `3px solid ${C.good}` : undefined,
+                        border: `1px solid ${sel ? (blk ? 'rgba(192,38,38,.55)' : 'rgba(57,135,229,.55)') : (rez ? 'rgba(14,122,14,.3)' : (blk ? 'rgba(192,38,38,.3)' : C.ring))}`,
+                        opacity: rez && !sel ? 0.72 : 1,
+                        background: sel ? (blk ? 'rgba(192,38,38,.08)' : 'rgba(57,135,229,.08)') : (rez ? 'rgba(14,122,14,.04)' : (blk ? 'rgba(192,38,38,.04)' : '#fff')) }}>
             <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: blk ? C.critical : C.ink }}>{s.user}</span>
             <span style={{ fontSize: 11, color: C.muted }}>{s.role}</span>
-            <span className="mono" style={{ textAlign: 'right', fontWeight: 600, fontSize: 13, color: scoreColor(s.score) }}>{Math.round(s.score)}</span>
+            <span className="mono" style={{ textAlign: 'right', fontWeight: 600, fontSize: 13, color: sessColor(s) }}>{Math.round(s.score)}</span>
             <span className="mono" style={{ fontSize: 10.5, color: C.muted2 }}>{s.src}</span>
             <span>{typePill(s.type)}</span>
-            <span style={{ fontSize: 10.5, fontWeight: 600, color: sm.color, display: 'flex', alignItems: 'center', gap: 4 }}>
-              {sm.icon} {sm.label}
-              {decisions?.[s.id] && <span className="pill" style={{ fontSize: 8, background: `${DECO[decisions[s.id].label]}22`, color: DECO[decisions[s.id].label] }}>{decisions[s.id].label}</span>}
-            </span>
+            {rez ? (
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.good, display: 'flex', alignItems: 'center', gap: 3 }}
+                    title={`Reviewed by ${s.reviewedBy || 'analyst'}`}>
+                ✓ {s.review === 'DISMISSED' ? 'DISMISSED' : 'RESOLVED'}
+              </span>
+            ) : (
+              <span style={{ fontSize: 10.5, fontWeight: 600, color: sm.color, display: 'flex', alignItems: 'center', gap: 4 }}>
+                {sm.icon} {sm.label}
+                {decisions?.[s.id] && <span className="pill" style={{ fontSize: 8, background: `${DECO[decisions[s.id].label]}22`, color: DECO[decisions[s.id].label] }}>{decisions[s.id].label}</span>}
+              </span>
+            )}
           </div>
         )
       })}
@@ -337,17 +352,23 @@ function SessionsTable({ sessions, selected, select, flashUser, decisions, pad =
 
 function SelectedCard({ selected }) {
   if (!selected) return null
-  const sm = statusMeta(selected.status)
+  const sm = statusMeta(selected.status); const rez = isResolved(selected)
   return (
     <>
-      <Gauge score={selected.score} size={116} />
+      <Gauge score={selected.score} size={116} resolved={rez} />
       <div style={{ minWidth: 0 }}>
         <div className="label">SELECTED SESSION</div>
         <div className="mono" style={{ fontSize: 14, fontWeight: 600, marginTop: 6, color: selected.status === 'BLOCKED' ? C.critical : C.ink }}>{selected.user}</div>
         <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{selected.role} · {selected.src}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
           {typePill(selected.type, 9.5)}
-          <span style={{ fontSize: 12, fontWeight: 700, color: scoreColor(selected.score) }}>{sm.icon} {sm.label}</span>
+          {rez ? (
+            <span style={{ fontSize: 12, fontWeight: 700, color: C.good }}>
+              ✓ {selected.review === 'DISMISSED' ? 'DISMISSED' : 'RESOLVED'} · reviewed by {selected.reviewedBy || 'analyst'}
+            </span>
+          ) : (
+            <span style={{ fontSize: 12, fontWeight: 700, color: scoreColor(selected.score) }}>{sm.icon} {sm.label}</span>
+          )}
         </div>
       </div>
     </>
@@ -388,17 +409,21 @@ function Timeline({ events }) {
 function AlertRow({ a, flashUser, big }) {
   const sm = sevMeta[a.severity] || sevMeta.INFO
   const type = a.insider_type
-  const fresh = flashUser && a.message?.includes(flashUser)
+  const fresh = flashUser && a.message?.includes(flashUser) && !a.resolved
   return (
     <div className={fresh ? 'flash' : ''} style={{ display: 'flex', alignItems: big ? 'center' : 'flex-start', flexDirection: big ? 'row' : 'column',
-                  gap: big ? 12 : 5, border: `1px solid ${C.ring}`, borderRadius: big ? 8 : 7, padding: big ? '11px 14px' : '8px 10px' }}>
+                  gap: big ? 12 : 5, border: `1px solid ${a.resolved ? 'rgba(14,122,14,.25)' : C.ring}`, borderRadius: big ? 8 : 7,
+                  padding: big ? '11px 14px' : '8px 10px', opacity: a.resolved ? 0.6 : 1,
+                  background: a.resolved ? 'rgba(14,122,14,.03)' : undefined }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: big ? 'auto' : '100%' }}>
         <span className="pill" style={{ background: sm.bg, color: sm.fg, fontSize: 9.5, letterSpacing: .6, padding: '3px 8px' }}>{a.severity}</span>
         {typePill(type)}
+        {a.resolved && <span className="pill" style={{ background: 'rgba(14,122,14,.14)', color: C.good, fontSize: 9, letterSpacing: .4, padding: '3px 7px' }}>✓ RESOLVED</span>}
         {!big && <span className="mono" style={{ fontSize: 10.5, color: C.muted3, marginLeft: 'auto' }}>{T(a.created_at)}</span>}
       </div>
-      <span style={{ fontSize: big ? 12.5 : 12, color: C.ink2, flex: big ? 1 : 'none', marginTop: big ? 0 : 5 }}>{a.message}</span>
-      <span style={{ fontSize: 11.5, fontWeight: 600, color: actionColor(a.action_taken) }}>{a.action_taken}</span>
+      <span style={{ fontSize: big ? 12.5 : 12, color: C.ink2, flex: big ? 1 : 'none', marginTop: big ? 0 : 5,
+                     textDecoration: a.resolved ? 'line-through' : 'none' }}>{a.message}</span>
+      <span style={{ fontSize: 11.5, fontWeight: 600, color: a.resolved ? C.muted2 : actionColor(a.action_taken) }}>{a.action_taken}</span>
       {big && <span className="mono" style={{ fontSize: 11, color: C.muted3, flex: 'none' }}>{T(a.created_at)}</span>}
     </div>
   )

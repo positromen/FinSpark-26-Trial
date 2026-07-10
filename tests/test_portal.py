@@ -129,3 +129,27 @@ def test_step_up_mfa_unblocks_without_stacking_events(client):
     # LOGIN + exactly one export event (retry did not stack)
     exports = [e for e in ok["session"]["events"] if e["action"] == "DB_EXPORT"]
     assert len(exports) == 1
+
+
+# --- SOC triage resolution ---
+
+def test_soc_approve_resolves_session_but_keeps_score(client):
+    ha = _login(client, "soc_admin")
+    sc = client.post("/demo/scenario/compromised", headers=ha).json()
+    sid = sc["session_id"]
+    before = next(s for s in client.get("/soc/overview", headers=ha).json()["sessions"] if s["id"] == sid)
+    assert before["review_status"] is None and before["score"] >= 40
+
+    r = client.post(f"/soc/sessions/{sid}/approve", headers=ha).json()
+    assert r["review_status"] == "APPROVED"
+    after = next(s for s in client.get("/soc/overview", headers=ha).json()["sessions"] if s["id"] == sid)
+    assert after["review_status"] == "APPROVED" and after["reviewed_by"] == "soc_admin"
+    assert after["score"] == before["score"]                 # history preserved, not rewritten
+
+
+def test_soc_dismiss_marks_session_reviewed(client):
+    ha = _login(client, "soc_admin")
+    sid = client.post("/demo/scenario/negligent", headers=ha).json()["session_id"]
+    client.post(f"/soc/sessions/{sid}/dismiss", headers=ha)
+    row = next(s for s in client.get("/soc/overview", headers=ha).json()["sessions"] if s["id"] == sid)
+    assert row["review_status"] == "DISMISSED"

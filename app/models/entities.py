@@ -42,6 +42,11 @@ class Session(Base):
     source_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     geo: Mapped[str | None] = mapped_column(String(64), nullable=True)
     device: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Analyst triage outcome: APPROVED / DISMISSED once a human has reviewed the flag.
+    # Set by the SOC Approve/Dismiss actions so a reviewed session reads as resolved
+    # (the risk_score is kept as the immutable record of what actually happened).
+    review_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     user: Mapped[User] = relationship(back_populates="sessions")
     events: Mapped[list["Event"]] = relationship(back_populates="session")
@@ -97,6 +102,10 @@ class Alert(Base):
     insider_type: Mapped[str | None] = mapped_column(String(16), nullable=True)  # malicious/negligent/compromised
     message: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    # Banking alerts point back to their transaction so resolving the transfer
+    # (approve/reject/clear/confirm) can clear the alert from the SOC feed.
+    ref_txn: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class AuditLogEntry(Base):

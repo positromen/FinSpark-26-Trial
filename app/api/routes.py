@@ -290,6 +290,7 @@ async def bank_transfer(body: TransferIn, user: User = Depends(_employee),
         a = result["alert"]
         db.add(Alert(user_id=user.id, session_id=None, severity=a["severity"],
                      action_taken=a["action"], insider_type=None,
+                     ref_txn=result["transaction"]["id"],  # so resolving it clears the alert
                      message="Banking: " + a["text"]))
         db.commit()
         audit.append_entry(db, actor="core-banking", action=f"TXN_{a['action']}",
@@ -307,6 +308,13 @@ def _txn_audit_payload(tx: dict, checker: str) -> str:
             f"maker={tx['maker']} checker={checker} {tx['from']}->{tx['to']}")
 
 
+def _clear_txn_alerts(db: OrmSession, tx_id: int) -> None:
+    """Resolve the SOC banking alert(s) for a transaction once its review is done."""
+    for al in db.query(Alert).filter(Alert.ref_txn == tx_id, Alert.resolved == False).all():  # noqa: E712
+        al.resolved = True
+    db.commit()
+
+
 @router.post("/bank/transactions/{tx_id}/approve")
 async def bank_tx_approve(tx_id: int, user: User = Depends(_employee),
                           db: OrmSession = Depends(get_db)) -> dict:
@@ -316,6 +324,7 @@ async def bank_tx_approve(tx_id: int, user: User = Depends(_employee),
         raise HTTPException(400, str(e))
     audit.append_entry(db, actor=user.username, action="TXN_APPROVED",
                        payload=_txn_audit_payload(r["transaction"], user.username))
+    _clear_txn_alerts(db, tx_id)
     return r
 
 
@@ -328,6 +337,7 @@ async def bank_tx_reject(tx_id: int, user: User = Depends(_employee),
         raise HTTPException(400, str(e))
     audit.append_entry(db, actor=user.username, action="TXN_REJECTED",
                        payload=_txn_audit_payload(r["transaction"], user.username))
+    _clear_txn_alerts(db, tx_id)
     return r
 
 
@@ -347,6 +357,7 @@ async def bank_tx_resolve_fraud(tx_id: int, body: FraudDecisionIn,
     action = "TXN_FRAUD_CLEARED" if body.decision == "clear" else "TXN_FRAUD_CONFIRMED"
     audit.append_entry(db, actor=user.username, action=action,
                        payload=_txn_audit_payload(r["transaction"], user.username))
+    _clear_txn_alerts(db, tx_id)
     await manager.broadcast({"type": "alert", "user": user.username, "role": user.role,
                              "severity": "INFO" if body.decision == "clear" else "CRITICAL",
                              "action": r["status"], "score": 0, "insider_type": None,
@@ -472,6 +483,7 @@ def soc_overview(user: User = Depends(require_analyst),
         "sessions": [{"id": s.id, "user": s.user.username, "role": s.user.role,
                       "started_at": s.started_at.isoformat(),
                       "score": round(s.risk_score, 1),
+                      "review_status": s.review_status, "reviewed_by": s.reviewed_by,
                       "reasons": json.loads(s.risk_reasons or "[]")}
                      for s in reversed(recent)],
         "heatmap": {"dates": [d.isoformat() for d in dates], "rows": heatmap},
@@ -488,6 +500,7 @@ def _live_sessions(db: OrmSession) -> list[dict]:
         out.append({
             "id": s.id, "user": s.user.username, "name": s.user.name, "role": s.user.role,
             "status": s.status, "score": round(s.risk_score, 1),
+            "review_status": s.review_status, "reviewed_by": s.reviewed_by,
             "insider_type": dominant_insider_type(
                 evaluate(s.user, evs, jit_privileges=jit.active_privileges(db, s.user))),
             "source_ip": s.source_ip, "geo": s.geo, "device": s.device,
@@ -510,7 +523,7 @@ def soc_alerts(limit: int = 50, user: User = Depends(require_analyst),
     alerts = db.query(Alert).order_by(Alert.created_at.desc()).limit(limit).all()
     return [{"id": a.id, "user_id": a.user_id, "session_id": a.session_id,
              "severity": a.severity, "action_taken": a.action_taken,
-             "insider_type": a.insider_type,
+             "insider_type": a.insider_type, "resolved": a.resolved,
              "message": a.message, "created_at": a.created_at.isoformat()} for a in alerts]
 
 
@@ -541,15 +554,22 @@ def soc_session_commands(session_id: int, user: User = Depends(require_analyst),
 @router.post("/soc/sessions/{session_id}/approve")
 async def soc_approve(session_id: int, user: User = Depends(require_analyst),
                       db: OrmSession = Depends(get_db)) -> dict:
-    """Maker-checker: an analyst approves a held session (records the decision)."""
+    """Maker-checker: an analyst approves a session — the flag is resolved.
+
+    The session is marked reviewed (APPROVED) so it reads as normal on the board;
+    its risk_score is preserved as the immutable record of what actually happened.
+    """
     sess = db.get(Session, session_id)
     if sess is None:
         raise HTTPException(404, "session not found")
+    sess.review_status, sess.reviewed_by = "APPROVED", user.username
+    db.commit()
     audit.append_entry(db, actor=user.username, action="MAKER_CHECKER_APPROVED",
-                       payload=f"session={session_id} user={sess.user.username}")
+                       payload=f"session={session_id} user={sess.user.username} resolved=APPROVED")
     await manager.broadcast({"type": "presence", "event": "approved", "session_id": session_id,
                              "user": sess.user.username})
-    return {"ok": True, "session_id": session_id, "approved_by": user.username, "action": "APPROVED"}
+    return {"ok": True, "session_id": session_id, "approved_by": user.username,
+            "action": "APPROVED", "review_status": "APPROVED"}
 
 
 @router.post("/soc/sessions/{session_id}/lock")
@@ -561,6 +581,7 @@ async def soc_lock(session_id: int, user: User = Depends(require_analyst),
         raise HTTPException(404, "session not found")
     sess.status = "BLOCKED"
     sess.ended_at = datetime.now()
+    sess.review_status, sess.reviewed_by = None, None  # locking overrides any prior "reviewed" state
     db.commit()
     audit.append_entry(db, actor=user.username, action="ANALYST_LOCK",
                        payload=f"session={session_id} user={sess.user.username} locked by analyst")
@@ -574,15 +595,18 @@ async def soc_lock(session_id: int, user: User = Depends(require_analyst),
 @router.post("/soc/sessions/{session_id}/dismiss")
 async def soc_dismiss(session_id: int, user: User = Depends(require_analyst),
                       db: OrmSession = Depends(get_db)) -> dict:
-    """Analyst dismisses a session as reviewed / benign (false positive), audit-logged."""
+    """Analyst dismisses a session as reviewed / benign (false positive) — flag resolved."""
     sess = db.get(Session, session_id)
     if sess is None:
         raise HTTPException(404, "session not found")
+    sess.review_status, sess.reviewed_by = "DISMISSED", user.username
+    db.commit()
     audit.append_entry(db, actor=user.username, action="ANALYST_DISMISS",
-                       payload=f"session={session_id} user={sess.user.username} marked reviewed (benign)")
+                       payload=f"session={session_id} user={sess.user.username} resolved=DISMISSED (benign)")
     await manager.broadcast({"type": "presence", "event": "dismissed", "session_id": session_id,
                              "user": sess.user.username})
-    return {"ok": True, "session_id": session_id, "dismissed_by": user.username}
+    return {"ok": True, "session_id": session_id, "dismissed_by": user.username,
+            "review_status": "DISMISSED"}
 
 
 @router.get("/soc/jit")

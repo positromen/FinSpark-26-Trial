@@ -1,8 +1,10 @@
-import { gaugeDash, scoreColor } from '../ui.js'
+import { C, gaugeDash, scoreColor } from '../ui.js'
 
 // Circular risk gauge (0–100) matching the v2 design.
-export default function Gauge({ score = 0, size = 120 }) {
-  const col = scoreColor(score)
+// `resolved` renders the ring green — an analyst has reviewed this session, so it
+// reads as normal even though the underlying score is preserved.
+export default function Gauge({ score = 0, size = 120, resolved = false }) {
+  const col = resolved ? C.good : scoreColor(score)
   return (
     <svg width={size} height={size} viewBox="0 0 128 128" style={{ flex: 'none' }}>
       <circle cx="64" cy="64" r="54" fill="none" stroke="#e6eaf0" strokeWidth="10" />

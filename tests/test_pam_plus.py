@@ -27,8 +27,10 @@ def env(tmp_path, monkeypatch):
     seed_users(session)
     simulate_history(session, days=14, seed=3, end=datetime(2026, 7, 3, 12, 0))
     session.commit()
+    from app.bank import seed_bank
     from app.security.vault import seed_credentials
     seed_credentials(session)
+    seed_bank(session)
     app.dependency_overrides[auth.get_db] = lambda: session
     routes._model.__init__()
     yield TestClient(app), session
@@ -208,6 +210,27 @@ def test_jit_endpoints_are_role_gated(env):
     ha = _headers(client, "soc_admin")
     assert client.get("/soc/jit", headers=h).status_code == 403       # employee -> SOC: no
     assert client.get("/jit/mine", headers=ha).status_code == 403     # analyst -> portal: no
+
+
+# --- SOC triage clears the banking alert when the officer resolves the transfer ---
+
+def test_officer_resolution_clears_banking_alert(env):
+    client, _ = env
+    maker = _headers(client, "rmehta")
+    officer = _headers(client, "dgokhale")
+    analyst = _headers(client, "soc_admin")
+    client.post("/portal/bootstrap", headers=maker)
+    t = client.post("/bank/transfer", headers=maker,
+                    json={"from_number": "50100000004821", "to_number": "59990000001111",
+                          "amount": 30000, "mode": "NEFT"}).json()
+    assert t["status"] == "FLAGGED"
+    alerts = client.get("/soc/alerts", headers=analyst).json()
+    assert any(a["message"].startswith("Banking:") and not a["resolved"] for a in alerts)
+
+    client.post(f"/bank/transactions/{t['transaction']['id']}/resolve-fraud",
+                headers=officer, json={"decision": "confirm"})
+    alerts = client.get("/soc/alerts", headers=analyst).json()
+    assert any(a["message"].startswith("Banking:") and a["resolved"] for a in alerts)  # cleared
 
 
 # --- measured model performance ---
